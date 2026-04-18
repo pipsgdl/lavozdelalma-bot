@@ -1,0 +1,5 @@
+.env
+.env.railway
+__pycache__/
+*.pyc
+*.pyo

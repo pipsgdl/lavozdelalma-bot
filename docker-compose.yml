@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  lavozdelalma-bot:
+    build: .
+    container_name: lavozdelalma-bot
+    restart: always
+    env_file:
+      - .env
+    # Logging con rotación para no llenar el disco
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
