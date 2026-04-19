@@ -214,6 +214,55 @@ def generar_contenido(idea: str) -> dict:
     return _parse_json_response(raw)
 
 
+AJUSTE_PROMPT = """Paty está iterando sobre un diseño de post. Te dice cómo ajustarlo.
+
+ESTADO ACTUAL:
+- Frase en la imagen: "{frase}"
+- Template actual: {template}
+
+TEMPLATES DISPONIBLES (nombre → descripción):
+- crema → fondo beige muy claro, texto verde oscuro (tono suave, luminoso)
+- bosque → fondo verde oscuro, texto crema (tono profundo, sereno)
+- terracota → fondo cobre/tierra, texto crema (cálido, fuerte)
+- lavanda → fondo rosa pálido, texto verde oscuro (delicado, claro)
+- salvia → fondo verde salvia medio, texto crema (natural, equilibrado)
+
+INSTRUCCIÓN DE PATY: "{instruccion}"
+
+Interpreta lo que pide y devuelve SOLO JSON:
+{{
+  "frase": "nueva frase exacta o null si no cambia",
+  "template": "nombre-del-template o null si no cambia",
+  "cambio_resumido": "breve descripción del cambio en español (máx 10 palabras)"
+}}
+
+REGLAS DE INTERPRETACIÓN:
+- "más claro / clarito / suave / luminoso" → crema o lavanda
+- "más oscuro / fuerte / profundo" → bosque
+- "cálido / tierra / cobre" → terracota
+- "natural / verde" → salvia
+- "rosa / delicado" → lavanda
+- "edita la frase: X" / "cambia texto a X" / "pon X" → frase = X (usa el texto literal)
+- Si solo cambia el fondo/color → frase = null
+- Si solo cambia el texto → template = null
+- Si pide ambas → devuelve ambas
+- Si no entiendes → todos null y explica en cambio_resumido
+
+Responde SOLO el JSON."""
+
+
+def interpretar_ajuste(instruccion: str, frase: str, template_name: str) -> dict:
+    """Interpreta una instrucción de ajuste con la IA."""
+    raw = chat_ia(
+        [{"role": "user", "content": AJUSTE_PROMPT.format(
+            frase=frase, template=template_name, instruccion=instruccion,
+        )}],
+        max_tokens=300,
+        temperature=0.2,
+    )
+    return _parse_json_response(raw)
+
+
 def preguntar_ia(mensaje: str) -> str:
     """Respuesta libre con el motor IA híbrido."""
     return chat_ia([
@@ -367,10 +416,14 @@ def subir_imagen(image_bytes: bytes) -> str:
         "name":  f"lavoz_{random.randint(1000, 9999)}",
     }).encode()
     req = urllib.request.Request("https://api.imgbb.com/1/upload", data=data, method="POST")
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        result = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            result = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"imgbb {e.code}: {body}") from None
     if not result.get("success"):
-        raise RuntimeError(f"imgbb error: {result}")
+        raise RuntimeError(f"imgbb error: {result.get('error', result)}")
     return result["data"]["url"]
 
 
@@ -381,8 +434,20 @@ def subir_imagen(image_bytes: bytes) -> str:
 def meta_post(url: str, params: dict) -> dict:
     data = urllib.parse.urlencode(params).encode()
     req  = urllib.request.Request(url, data=data, method="POST")
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        try:
+            err = json.loads(body).get("error", {})
+            msg  = err.get("error_user_msg") or err.get("message") or body
+            code = err.get("code", e.code)
+            sub  = err.get("error_subcode")
+            extra = f" [subcode {sub}]" if sub else ""
+            raise RuntimeError(f"Meta {e.code} (code {code}){extra}: {msg}") from None
+        except (json.JSONDecodeError, AttributeError):
+            raise RuntimeError(f"Meta {e.code}: {body[:300]}") from None
 
 
 def publicar_instagram(image_url: str, caption: str) -> str:
@@ -416,11 +481,14 @@ def publicar_facebook(image_url: str, caption: str) -> str:
 def teclado_preview() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅ Publicar", callback_data="pub_aprobar"),
-            InlineKeyboardButton("✏️ Editar caption", callback_data="pub_editar"),
+            InlineKeyboardButton("✅ Publicar",       callback_data="pub_aprobar"),
+            InlineKeyboardButton("🎨 Ajustar diseño", callback_data="pub_ajustar"),
         ],
         [
-            InlineKeyboardButton("🎨 Otra imagen", callback_data="pub_regenerar"),
+            InlineKeyboardButton("✏️ Editar caption", callback_data="pub_editar"),
+            InlineKeyboardButton("🔄 Otra imagen",    callback_data="pub_regenerar"),
+        ],
+        [
             InlineKeyboardButton("❌ Cancelar", callback_data="pub_cancelar"),
         ],
     ])
@@ -444,15 +512,18 @@ async def pipeline_contenido(update: Update, ctx: ContextTypes.DEFAULT_TYPE, ide
 
         # 2 — Generar imagen de marca
         await msg.edit_text("🎨 Creando diseño con la identidad de marca...")
-        img_bytes = generar_imagen(frase)
+        tpl_idx   = random.randrange(len(TEMPLATES))
+        img_bytes = generar_imagen(frase, tpl_idx)
 
         # 3 — Guardar en estado
         ctx.user_data["pending"] = {
-            "idea":        idea,
-            "caption":     caption,
-            "frase":       frase,
-            "categoria":   cat,
-            "image_bytes": img_bytes,
+            "idea":          idea,
+            "caption":       caption,
+            "frase":         frase,
+            "categoria":     cat,
+            "image_bytes":   img_bytes,
+            "template_idx":  tpl_idx,
+            "template_name": TEMPLATES[tpl_idx]["name"],
         }
 
         # 4 — Preview
@@ -577,6 +648,79 @@ async def handle_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+    # ¿Está en modo ajuste de diseño?
+    if ctx.user_data.get("editing_design"):
+        p = ctx.user_data.get("pending")
+        if not p:
+            ctx.user_data["editing_design"] = False
+            await update.message.reply_text(
+                "⚠️ No hay post activo. Mándame una idea nueva para empezar."
+            )
+            return
+
+        if texto.lower() in {"listo", "ok", "salir", "/listo", "fin", "ya"}:
+            ctx.user_data["editing_design"] = False
+            await update.message.reply_photo(
+                photo=p["image_bytes"],
+                caption=(
+                    f"✨ *Diseño final* (_{p.get('template_name', 'N/A')}_)\n\n"
+                    f"{p['caption'][:900]}"
+                ),
+                parse_mode="Markdown",
+                reply_markup=teclado_preview(),
+            )
+            return
+
+        msg = await update.message.reply_text("🎨 Aplicando ajuste...")
+        try:
+            ajuste = interpretar_ajuste(
+                texto,
+                p["frase"],
+                p.get("template_name", "random"),
+            )
+        except Exception as e:
+            logger.error(f"Interpretar ajuste falló: {e}", exc_info=True)
+            await msg.edit_text(
+                f"❌ No entendí el ajuste: {e}\n\nPrueba algo como _fondo más claro_ o _cambia la frase a 'soy refugio'_.",
+                parse_mode="Markdown",
+            )
+            return
+
+        nueva_frase    = ajuste.get("frase") or p["frase"]
+        nuevo_tpl_name = ajuste.get("template") or p.get("template_name")
+        resumen        = ajuste.get("cambio_resumido", "ajuste aplicado")
+
+        tpl_idx = next(
+            (i for i, t in enumerate(TEMPLATES) if t["name"] == nuevo_tpl_name),
+            p.get("template_idx", 0),
+        )
+
+        try:
+            new_img = generar_imagen(nueva_frase, tpl_idx)
+        except Exception as e:
+            await msg.edit_text(f"❌ Error generando imagen: {e}")
+            return
+
+        p["frase"]         = nueva_frase
+        p["image_bytes"]   = new_img
+        p["template_idx"]  = tpl_idx
+        p["template_name"] = TEMPLATES[tpl_idx]["name"]
+
+        await msg.delete()
+        preview = p["caption"] if len(p["caption"]) <= 900 else p["caption"][:897] + "..."
+        await update.message.reply_photo(
+            photo=new_img,
+            caption=(
+                f"🎨 *{resumen}*\n"
+                f"_Template: {p['template_name']}_\n\n"
+                f"{preview}\n\n"
+                "_Sigue ajustando o escribe_ *listo* _para terminar._"
+            ),
+            parse_mode="Markdown",
+            reply_markup=teclado_preview(),
+        )
+        return
+
     # Pipeline normal: tratar como nueva idea
     await pipeline_contenido(update, ctx, texto)
 
@@ -681,6 +825,8 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # ── APROBAR → Publicar ──────────────────────────────────────────
     if action == "pub_aprobar":
+        ctx.user_data.pop("editing_design", None)
+        ctx.user_data.pop("editing_caption", None)
         await query.edit_message_caption(
             "📤 *Subiendo imagen y publicando...*", parse_mode="Markdown"
         )
@@ -725,21 +871,24 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "✏️ Escribe el nuevo caption y te muestro el preview actualizado:"
         )
 
-    # ── REGENERAR imagen ────────────────────────────────────────────
+    # ── REGENERAR imagen (rotando template) ─────────────────────────
     elif action == "pub_regenerar":
         await query.edit_message_caption("🎨 Generando nueva imagen...")
         try:
-            new_img = generar_imagen(p["frase"])
-            p["image_bytes"] = new_img
+            current = p.get("template_idx", 0)
+            new_idx = (current + random.randint(1, len(TEMPLATES) - 1)) % len(TEMPLATES)
+            new_img = generar_imagen(p["frase"], new_idx)
+            p["image_bytes"]   = new_img
+            p["template_idx"]  = new_idx
+            p["template_name"] = TEMPLATES[new_idx]["name"]
 
             preview = p["caption"]
             if len(preview) > 950:
                 preview = preview[:947] + "..."
 
-            # Telegram no permite cambiar la foto, así que enviamos mensaje nuevo
             await query.message.reply_photo(
                 photo=new_img,
-                caption=f"📝 *Preview actualizado:*\n\n{preview}",
+                caption=f"📝 *Preview actualizado* (_{TEMPLATES[new_idx]['name']}_):\n\n{preview}",
                 parse_mode="Markdown",
                 reply_markup=teclado_preview(),
             )
@@ -749,10 +898,27 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 reply_markup=teclado_preview(),
             )
 
+    # ── AJUSTAR diseño (modo conversacional) ────────────────────────
+    elif action == "pub_ajustar":
+        ctx.user_data["editing_design"] = True
+        await query.edit_message_caption(
+            "🎨 *Modo ajuste de diseño activado*\n\n"
+            "Escríbeme qué cambiar — ejemplos:\n"
+            "• _fondo más claro_\n"
+            "• _usa template bosque_\n"
+            "• _edita la frase: soy mi refugio_\n"
+            "• _cambia a terracota y pon 'respiro y vuelvo'_\n\n"
+            f"🎨 Template actual: *{p.get('template_name', 'N/A')}*\n"
+            f"💬 Frase actual: _{p['frase']}_\n\n"
+            "Cuando termines, escribe *listo* o toca ✅ Publicar en el siguiente preview.",
+            parse_mode="Markdown",
+        )
+
     # ── CANCELAR ────────────────────────────────────────────────────
     elif action == "pub_cancelar":
         ctx.user_data.pop("pending", None)
         ctx.user_data.pop("editing_caption", None)
+        ctx.user_data.pop("editing_design", None)
         await query.edit_message_caption(
             "🚫 Publicación cancelada.\n💡 ¡Mándame otra idea cuando quieras!"
         )
