@@ -1015,31 +1015,66 @@ async def handle_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ¿Está editando caption desde variantes? (solo actualiza el texto)
+    # ¿Está editando caption desde variantes? → actualizar + re-mostrar el álbum
     if ctx.user_data.get("editing_caption_variantes"):
         ctx.user_data["editing_caption_variantes"] = False
         p = ctx.user_data.get("pending")
-        if p:
-            p["caption"] = texto
+        if not p:
+            await update.message.reply_text("⚠️ No hay post activo. Mándame una idea nueva.")
+            return
+        p["caption"] = texto
+        variantes = p.get("variantes", [])
+        if not variantes:
             await update.message.reply_text(
-                "✅ *Caption actualizado.* Sigue eligiendo tu variante con los botones del álbum de arriba.",
-                parse_mode="Markdown",
+                "✅ Caption actualizado. (No hay variantes para mostrar — usa los botones si siguen activos)."
             )
+            return
+        # Re-enviar las 4 variantes con el caption nuevo + botones
+        primer_caption = f"Opción 1 — {variantes[0]['template_name']}\n\n{texto[:900]}"
+        media = [
+            InputMediaPhoto(
+                media=v["image_bytes"],
+                caption=(primer_caption if i == 0 else None),
+            )
+            for i, v in enumerate(variantes)
+        ]
+        try:
+            await update.message.reply_media_group(media=media)
+        except Exception as e:
+            logger.error("Fallo media_group en editar caption: %s", e)
+            for i, v in enumerate(variantes):
+                try:
+                    await update.message.reply_photo(
+                        photo=v["image_bytes"],
+                        caption=f"Opción {i+1} — {v['template_name']}" + (f"\n\n{texto[:800]}" if i == 0 else ""),
+                    )
+                except Exception:
+                    pass
+        await update.message.reply_text(
+            "✅ Caption actualizado. Elige la variante:",
+            reply_markup=teclado_variantes(len(variantes)),
+        )
         return
 
-    # ¿Está editando caption del post único?
+    # ¿Está editando caption del post único? → re-mostrar preview con todos los botones
     if ctx.user_data.get("editing_caption"):
         ctx.user_data["editing_caption"] = False
         p = ctx.user_data.get("pending")
         if p:
             p["caption"] = texto
             preview = texto if len(texto) <= 950 else texto[:947] + "..."
-            await update.message.reply_photo(
-                photo=p["image_bytes"],
-                caption=f"📝 *Caption actualizado:*\n\n{preview}",
-                parse_mode="Markdown",
-                reply_markup=teclado_preview(),
-            )
+            try:
+                await update.message.reply_photo(
+                    photo=p["image_bytes"],
+                    caption=f"📝 Caption actualizado:\n\n{preview}",
+                    reply_markup=teclado_preview(),
+                )
+            except Exception as e:
+                logger.error("Fallo re-mostrar preview tras editar caption: %s", e)
+                await update.message.reply_text(
+                    "✅ Caption actualizado. Usa los botones para continuar.",
+                    reply_markup=teclado_preview(),
+                )
             return
 
     # ¿Está en modo ajuste de diseño (post único o slide de carrusel)?
