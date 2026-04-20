@@ -29,7 +29,7 @@ from telegram.ext import (
     ContextTypes,
 )
 from groq import Groq
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
 # ── Logging ─────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -57,10 +57,29 @@ GROQ_MODEL       = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 # ── Cliente Groq (para Whisper y fallback de texto) ─────────────────
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# ── Rutas de fuentes ────────────────────────────────────────────────
+# ── Rutas de fuentes + brand ────────────────────────────────────────
 FONTS_DIR   = Path(__file__).parent / "fonts"
 FONT_TITLE  = str(FONTS_DIR / "bruney-season.otf")
 FONT_SCRIPT = str(FONTS_DIR / "New-Icon-Script.otf")
+BRAND_DIR   = Path(__file__).parent / "brand"
+LOGO_PATH   = BRAND_DIR / "logo.png"
+
+# Cache en memoria de bg ya descargadas
+_BG_CACHE: dict[str, bytes] = {}
+_LOGO_CACHE: Image.Image | None = None
+
+def _load_logo() -> Image.Image | None:
+    """Carga el logo una sola vez."""
+    global _LOGO_CACHE
+    if _LOGO_CACHE is not None:
+        return _LOGO_CACHE
+    try:
+        _LOGO_CACHE = Image.open(LOGO_PATH).convert("RGBA")
+        logger.info("Logo cargado: %s", LOGO_PATH)
+    except Exception as e:
+        logger.warning("No se pudo cargar logo: %s", e)
+        _LOGO_CACHE = None
+    return _LOGO_CACHE
 
 # ══════════════════════════════════════════════════════════════════════
 #  IDENTIDAD DE MARCA
@@ -376,76 +395,161 @@ def wrap_text(text: str, font, max_width: int, draw: ImageDraw.Draw) -> list[str
     return lines
 
 
+# ── Pool curado de fotos de fondo por mood ──────────────────────────
+# Todas son CC0 de Unsplash (sin API key, URLs directas)
+PHOTO_POOL: dict[str, list[str]] = {
+    "calma": [
+        "https://images.unsplash.com/photo-1518199266791-5375a83190b7",  # bokeh corazones
+        "https://images.unsplash.com/photo-1508923567004-3a6b8004f3d7",  # cielo rosa
+        "https://images.unsplash.com/photo-1507525428034-b723cf961d3e",  # playa calma
+        "https://images.unsplash.com/photo-1519681393784-d120267933ba",  # montañas nevadas
+    ],
+    "enraizar": [
+        "https://images.unsplash.com/photo-1441974231531-c6227db76b6e",  # bosque niebla
+        "https://images.unsplash.com/photo-1511497584788-876760111969",  # árbol luz
+        "https://images.unsplash.com/photo-1500622944204-b135684e99fd",  # bosque
+        "https://images.unsplash.com/photo-1448375240586-882707db888b",  # árboles
+    ],
+    "ternura": [
+        "https://images.unsplash.com/photo-1490750967868-88aa4486c946",  # flores amarillas
+        "https://images.unsplash.com/photo-1487530811176-3780de880c2d",  # manos flores
+        "https://images.unsplash.com/photo-1469474968028-56623f02e42e",  # atardecer cálido
+        "https://images.unsplash.com/photo-1462275646964-a0e3386b89fa",  # peonías
+    ],
+    "fuerza": [
+        "https://images.unsplash.com/photo-1506744038136-46273834b3fb",  # lago montaña
+        "https://images.unsplash.com/photo-1470770841072-f978cf4d019e",  # montaña niebla
+        "https://images.unsplash.com/photo-1504609813442-a8924e83f76e",  # ola
+        "https://images.unsplash.com/photo-1418065460487-3e41a6c84dc5",  # amanecer mar
+    ],
+    "introspeccion": [
+        "https://images.unsplash.com/photo-1513002749550-c59d786b8e6c",  # ventana lluvia
+        "https://images.unsplash.com/photo-1499209974431-9dddcece7f88",  # silueta luz
+        "https://images.unsplash.com/photo-1495973879283-6dbe2e8797dd",  # niebla camino
+        "https://images.unsplash.com/photo-1444492417251-9c84a5fa18e0",  # habitación suave
+    ],
+    "esperanza": [
+        "https://images.unsplash.com/photo-1506905925346-21bda4d32df4",  # amanecer
+        "https://images.unsplash.com/photo-1507525428034-b723cf961d3e",  # luz mar
+        "https://images.unsplash.com/photo-1470252649378-9c29740c9fa8",  # cielo rayo sol
+        "https://images.unsplash.com/photo-1497436072909-60f360e1d4b1",  # lago al alba
+    ],
+}
+
+CATEGORIA_A_MOOD = {
+    "reflexion":  "introspeccion",
+    "pregunta":   "introspeccion",
+    "consejo":    "enraizar",
+    "frase":      "ternura",
+    "motivacion": "fuerza",
+}
+
+
+def _pick_bg_url(categoria: str, seed_idx: int) -> str:
+    mood = CATEGORIA_A_MOOD.get(categoria, "ternura")
+    pool = PHOTO_POOL.get(mood, PHOTO_POOL["ternura"])
+    return pool[seed_idx % len(pool)]
+
+
+def _fetch_bg(url: str) -> bytes:
+    """Descarga la foto de fondo con cache en memoria."""
+    if url in _BG_CACHE:
+        return _BG_CACHE[url]
+    full_url = url + "?w=1080&h=1080&fit=crop&q=80"
+    req = urllib.request.Request(full_url, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = resp.read()
+        _BG_CACHE[url] = data
+        return data
+    except Exception as e:
+        logger.warning("Fallo descarga bg %s: %s", url, e)
+        return b""
+
+
 def generar_imagen(
     frase: str,
     template_idx: int | None = None,
     slide_pos: str | None = None,
+    categoria: str = "reflexion",
+    bg_seed: int | None = None,
 ) -> bytes:
-    """Genera imagen de marca 1080×1080. `slide_pos` dibuja un '1/4' discreto."""
+    """Genera imagen 1080×1080 con foto de fondo + overlay + logo real."""
     W, H = 1080, 1080
-    PAD  = 120
 
-    # Elegir plantilla
     tpl = TEMPLATES[template_idx] if template_idx is not None else random.choice(TEMPLATES)
-    bg      = hex_to_rgb(tpl["bg"])
+    tint    = hex_to_rgb(tpl["bg"])
     txt_col = hex_to_rgb(tpl["text"])
     accent  = hex_to_rgb(tpl["accent"])
 
-    img  = Image.new("RGB", (W, H), bg)
+    # ── Fondo: foto de Unsplash con tinte de marca ──
+    seed = bg_seed if bg_seed is not None else random.randint(0, 1000)
+    bg_url = _pick_bg_url(categoria, seed)
+    bg_data = _fetch_bg(bg_url)
+
+    if bg_data:
+        try:
+            bg = Image.open(io.BytesIO(bg_data)).convert("RGB").resize((W, H), Image.LANCZOS)
+            bg = bg.filter(ImageFilter.GaussianBlur(radius=1.2))
+            bg = ImageEnhance.Color(bg).enhance(0.6)
+            bg = ImageEnhance.Brightness(bg).enhance(0.82)
+            # Tinte de marca
+            bg = Image.blend(bg, Image.new("RGB", (W, H), tint), 0.58)
+            # Gradiente oscuro hacia abajo para legibilidad
+            grad = Image.new("L", (1, H))
+            for y in range(H):
+                grad.putpixel((0, y), int(255 * (y / H) ** 2.0 * 0.5))
+            grad = grad.resize((W, H))
+            bg = Image.composite(Image.new("RGB", (W, H), (0, 0, 0)), bg, grad)
+        except Exception as e:
+            logger.warning("Falló procesado bg, usando color sólido: %s", e)
+            bg = Image.new("RGB", (W, H), tint)
+    else:
+        bg = Image.new("RGB", (W, H), tint)
+
+    img  = bg.convert("RGB")
     draw = ImageDraw.Draw(img)
 
     # Fuentes
-    font_main   = load_font(FONT_TITLE,  62)
-    font_brand  = load_font(FONT_SCRIPT, 32)
-    font_tag    = load_font(FONT_SCRIPT, 24)
+    font_main = load_font(FONT_TITLE, 90)
 
-    # ── Decoración superior ──
-    y_top = 100
-    draw.line([(PAD + 40, y_top), (W - PAD - 40, y_top)], fill=accent, width=1)
-    draw_sparkle(draw, PAD + 20, y_top, 12, accent)
-    draw_sparkle(draw, W - PAD - 20, y_top, 12, accent)
-    draw_sparkle(draw, W // 2, 55, 8, accent)
+    # ── Líneas decorativas + sparkles ──
+    y_top, y_bot = 170, 820
+    draw.line([(140, y_top), (940, y_top)], fill=accent, width=1)
+    draw.line([(140, y_bot), (940, y_bot)], fill=accent, width=1)
+    for x in (120, 960):
+        draw_sparkle(draw, x, y_top, 10, accent)
+        draw_sparkle(draw, x, y_bot, 10, accent)
+    draw_sparkle(draw, W // 2, 110, 7, accent)
 
-    # ── Decoración inferior ──
-    y_bot = H - 170
-    draw.line([(PAD + 40, y_bot), (W - PAD - 40, y_bot)], fill=accent, width=1)
-    draw_sparkle(draw, PAD + 20, y_bot, 12, accent)
-    draw_sparkle(draw, W - PAD - 20, y_bot, 12, accent)
-
-    # ── Texto principal ──
-    max_w = W - PAD * 2 - 40
+    # ── Texto principal (zona superior-centro) ──
+    PAD = 130
+    max_w = W - PAD * 2
     lines = wrap_text(frase, font_main, max_w, draw)
-
-    line_h = 82
-    total_h = len(lines) * line_h
-    zone = y_bot - y_top - 40
-    start_y = y_top + 20 + (zone - total_h) // 2
-
+    line_h = 108
+    start_y = max(240, (y_bot - y_top - len(lines) * line_h) // 2 + y_top - 60)
     for i, line in enumerate(lines):
-        bbox = draw.textbbox((0, 0), line, font=font_main)
-        lw   = bbox[2] - bbox[0]
+        bb = draw.textbbox((0, 0), line, font=font_main)
+        lw = bb[2] - bb[0]
         draw.text(((W - lw) // 2, start_y + i * line_h), line, fill=txt_col, font=font_main)
 
-    # ── Marca de agua ──
-    brand = "Paty Godínez"
-    bb = draw.textbbox((0, 0), brand, font=font_brand)
-    bw = bb[2] - bb[0]
-    draw.text(((W - bw) // 2, H - 135), brand, fill=accent, font=font_brand)
-
-    tag = "La Voz del Alma"
-    bt = draw.textbbox((0, 0), tag, font=font_tag)
-    tw = bt[2] - bt[0]
-    draw.text(((W - tw) // 2, H - 95), tag, fill=accent, font=font_tag)
-
-    draw_sparkle(draw, W // 2 - bw // 2 - 22, H - 120, 6, accent)
-    draw_sparkle(draw, W // 2 + bw // 2 + 22, H - 120, 6, accent)
+    # ── Logo real (abajo centrado, reemplaza marca de agua textual) ──
+    logo = _load_logo()
+    if logo is not None:
+        logo_copy = logo.copy()
+        logo_copy.thumbnail((220, 220), Image.LANCZOS)
+        lw, lh = logo_copy.size
+        rgba = img.convert("RGBA")
+        rgba.alpha_composite(logo_copy, ((W - lw) // 2, 870))
+        img = rgba.convert("RGB")
+        draw = ImageDraw.Draw(img)
 
     # ── Indicador de slide (carrusel) ──
     if slide_pos:
-        font_slide = load_font(FONT_SCRIPT, 20)
+        font_slide = load_font(FONT_SCRIPT, 22)
         sb = draw.textbbox((0, 0), slide_pos, font=font_slide)
         sw = sb[2] - sb[0]
-        draw.text((W - PAD + 10 - sw, 60), slide_pos, fill=accent, font=font_slide)
+        draw.text((W - 140 - sw, 80), slide_pos, fill=accent, font=font_slide)
 
     # Exportar
     buf = io.BytesIO()
@@ -458,25 +562,27 @@ def generar_imagen(
 #  VARIANTES Y CARRUSELES
 # ══════════════════════════════════════════════════════════════════════
 
-def generar_variantes(frase: str, n: int = 4) -> list[dict]:
-    """Genera n variantes de diseño usando templates distintos. Devuelve list de {idx, name, bytes}."""
+def generar_variantes(frase: str, n: int = 4, categoria: str = "reflexion") -> list[dict]:
+    """Genera n variantes: cada una con template distinto Y foto de fondo distinta."""
     n = min(n, len(TEMPLATES))
     indices = random.sample(range(len(TEMPLATES)), n)
     variantes = []
-    for idx in indices:
+    for pos, idx in enumerate(indices):
         variantes.append({
             "template_idx":  idx,
             "template_name": TEMPLATES[idx]["name"],
-            "image_bytes":   generar_imagen(frase, idx),
+            "bg_seed":       random.randint(0, 1000) + pos,
+            "image_bytes":   generar_imagen(frase, idx, categoria=categoria, bg_seed=pos + random.randint(0, 100)),
         })
     return variantes
 
 
-def generar_slides_carrusel(frases: list[str], template_idx: int) -> list[bytes]:
-    """Genera N imágenes de carrusel, todas con el mismo template, con marca de slide."""
+def generar_slides_carrusel(frases: list[str], template_idx: int, categoria: str = "reflexion", bg_seed: int | None = None) -> list[bytes]:
+    """Genera N slides del carrusel: mismo template + MISMA foto de fondo para coherencia."""
     total = len(frases)
+    seed = bg_seed if bg_seed is not None else random.randint(0, 1000)
     return [
-        generar_imagen(f, template_idx, slide_pos=f"{i+1}/{total}")
+        generar_imagen(f, template_idx, slide_pos=f"{i+1}/{total}", categoria=categoria, bg_seed=seed)
         for i, f in enumerate(frases)
     ]
 
@@ -690,9 +796,9 @@ async def pipeline_contenido(update: Update, ctx: ContextTypes.DEFAULT_TYPE, ide
         cat       = contenido.get("categoria", "reflexion")
         slides    = contenido.get("slides_carrusel") or [frase]
 
-        # 2 — Generar 4 variantes de diseño con templates distintos
+        # 2 — Generar 4 variantes de diseño con templates distintos + fotos
         await msg.edit_text("🎨 Generando 4 opciones de diseño...")
-        variantes = generar_variantes(frase, n=4)
+        variantes = generar_variantes(frase, n=4, categoria=cat)
 
         # 3 — Guardar en estado
         ctx.user_data["pending"] = {
@@ -887,20 +993,23 @@ async def handle_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             p.get("template_idx", 0),
         )
 
+        cat = p.get("categoria", "reflexion")
+        bg_seed = p.get("bg_seed")
         try:
             if editando_slide:
-                # Regenerar solo ese slide
                 total = len(p["slides"])
-                new_img = generar_imagen(nueva_frase, tpl_idx, slide_pos=f"{slide_idx+1}/{total}")
+                new_img = generar_imagen(
+                    nueva_frase, tpl_idx, slide_pos=f"{slide_idx+1}/{total}",
+                    categoria=cat, bg_seed=bg_seed,
+                )
                 p["slides"][slide_idx] = nueva_frase
                 p["slide_images"][slide_idx] = new_img
-                # Si el usuario cambió template, aplicamos a todo el carrusel
                 if tpl_idx != p.get("template_idx") and ajuste.get("template"):
-                    p["slide_images"] = generar_slides_carrusel(p["slides"], tpl_idx)
+                    p["slide_images"] = generar_slides_carrusel(p["slides"], tpl_idx, categoria=cat, bg_seed=bg_seed)
                 p["template_idx"]  = tpl_idx
                 p["template_name"] = TEMPLATES[tpl_idx]["name"]
             else:
-                new_img = generar_imagen(nueva_frase, tpl_idx)
+                new_img = generar_imagen(nueva_frase, tpl_idx, categoria=cat, bg_seed=bg_seed)
                 p["frase"]         = nueva_frase
                 p["image_bytes"]   = new_img
                 p["template_idx"]  = tpl_idx
@@ -1115,6 +1224,7 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         p["image_bytes"]   = v["image_bytes"]
         p["template_idx"]  = v["template_idx"]
         p["template_name"] = v["template_name"]
+        p["bg_seed"]       = v.get("bg_seed")
         p["modo"]          = "single"
         await _edit_msg(query, f"✅ Elegiste la opción *{idx+1}* (_{v['template_name']}_). Preparando preview...")
         await _mostrar_preview_single(query, p)
@@ -1127,8 +1237,10 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if tpl_idx is None:
             tpl_idx = p.get("variantes", [{}])[0].get("template_idx", 0)
         await _edit_msg(query, "🎠 Generando carrusel con las slides del copy...")
+        cat = p.get("categoria", "reflexion")
+        bg_seed = p.get("bg_seed")
         try:
-            slide_imgs = generar_slides_carrusel(slides, tpl_idx)
+            slide_imgs = generar_slides_carrusel(slides, tpl_idx, categoria=cat, bg_seed=bg_seed)
         except Exception as e:
             await _edit_msg(query, f"❌ Error generando carrusel: {e}")
             return
@@ -1227,19 +1339,22 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(f"❌ Error publicando carrusel: {e}")
         return
 
-    # ═════════════════ CARRUSEL: regenerar (otro template) ═════════════════
+    # ═════════════════ CARRUSEL: regenerar (otro template + otra foto) ═════════════════
     if action == "car_regenerar":
         current = p.get("template_idx", 0)
         new_idx = _pick_random_template_idx(exclude=current)
+        new_seed = random.randint(0, 1000)
+        cat = p.get("categoria", "reflexion")
         await _edit_msg(query, f"🔄 Regenerando carrusel con template *{TEMPLATES[new_idx]['name']}*...")
         try:
-            slide_imgs = generar_slides_carrusel(p.get("slides", []), new_idx)
+            slide_imgs = generar_slides_carrusel(p.get("slides", []), new_idx, categoria=cat, bg_seed=new_seed)
         except Exception as e:
             await _edit_msg(query, f"❌ Error: {e}")
             return
         p["slide_images"]  = slide_imgs
         p["template_idx"]  = new_idx
         p["template_name"] = TEMPLATES[new_idx]["name"]
+        p["bg_seed"]       = new_seed
         await _mostrar_preview_carrusel(query, p)
         return
 
@@ -1296,18 +1411,21 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ═════════════════ POST ÚNICO: REGENERAR (otra variante) ═════════════════
+    # ═════════════════ POST ÚNICO: REGENERAR (otra variante + otra foto) ═════════════════
     if action == "pub_regenerar":
         current = p.get("template_idx", 0)
         new_idx = _pick_random_template_idx(exclude=current)
+        new_seed = random.randint(0, 1000)
+        cat = p.get("categoria", "reflexion")
         try:
-            new_img = generar_imagen(p["frase"], new_idx)
+            new_img = generar_imagen(p["frase"], new_idx, categoria=cat, bg_seed=new_seed)
         except Exception as e:
             await _edit_msg(query, f"❌ Error: {e}")
             return
         p["image_bytes"]   = new_img
         p["template_idx"]  = new_idx
         p["template_name"] = TEMPLATES[new_idx]["name"]
+        p["bg_seed"]       = new_seed
         await _mostrar_preview_single(query, p, nota=f"🔄 Cambié a *{TEMPLATES[new_idx]['name']}*")
         return
 
