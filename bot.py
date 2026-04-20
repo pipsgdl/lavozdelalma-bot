@@ -770,8 +770,10 @@ def teclado_variantes(n: int = 4) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         picks,
         [
-            InlineKeyboardButton("✏️ Editar frase",   callback_data="var_edit_frase"),
-            InlineKeyboardButton("📝 Editar caption", callback_data="var_edit_caption"),
+            InlineKeyboardButton("🖼 Editar texto en imagen", callback_data="var_edit_frase"),
+        ],
+        [
+            InlineKeyboardButton("📝 Editar texto del post", callback_data="var_edit_caption"),
         ],
         [
             InlineKeyboardButton("🎠 Hacer carrusel", callback_data="var_carrusel"),
@@ -789,14 +791,16 @@ def teclado_preview() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🎨 Ajustar diseño", callback_data="pub_ajustar"),
         ],
         [
-            InlineKeyboardButton("✏️ Editar caption", callback_data="pub_editar"),
-            InlineKeyboardButton("🔄 Otra variante",  callback_data="pub_regenerar"),
+            InlineKeyboardButton("📝 Editar texto del post", callback_data="pub_editar"),
         ],
         [
+            InlineKeyboardButton("🔄 Otra variante",  callback_data="pub_regenerar"),
             InlineKeyboardButton("🎠 Hacer carrusel", callback_data="pub_carrusel"),
-            InlineKeyboardButton("🎨 Abrir en Canva",  callback_data="pub_canva"),
         ],
-        [InlineKeyboardButton("❌ Cancelar", callback_data="pub_cancelar")],
+        [
+            InlineKeyboardButton("🎨 Abrir en Canva", callback_data="pub_canva"),
+            InlineKeyboardButton("❌ Cancelar",       callback_data="pub_cancelar"),
+        ],
     ])
 
 
@@ -1016,44 +1020,22 @@ async def handle_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ¿Está editando caption desde variantes? → actualizar + re-mostrar el álbum
+    # ¿Está editando caption desde variantes? → SOLO guardar texto (no regenera nada)
     if ctx.user_data.get("editing_caption_variantes"):
         ctx.user_data["editing_caption_variantes"] = False
         p = ctx.user_data.get("pending")
         if not p:
             await update.message.reply_text("⚠️ No hay post activo. Mándame una idea nueva.")
             return
-        p["caption"] = texto
-        variantes = p.get("variantes", [])
-        if not variantes:
-            await update.message.reply_text(
-                "✅ Caption actualizado. (No hay variantes para mostrar — usa los botones si siguen activos)."
-            )
-            return
-        # Re-enviar las 4 variantes con el caption nuevo + botones
-        primer_caption = f"Opción 1 — {variantes[0]['template_name']}\n\n{texto[:900]}"
-        media = [
-            InputMediaPhoto(
-                media=v["image_bytes"],
-                caption=(primer_caption if i == 0 else None),
-            )
-            for i, v in enumerate(variantes)
-        ]
-        try:
-            await update.message.reply_media_group(media=media)
-        except Exception as e:
-            logger.error("Fallo media_group en editar caption: %s", e)
-            for i, v in enumerate(variantes):
-                try:
-                    await update.message.reply_photo(
-                        photo=v["image_bytes"],
-                        caption=f"Opción {i+1} — {v['template_name']}" + (f"\n\n{texto[:800]}" if i == 0 else ""),
-                    )
-                except Exception:
-                    pass
+        p["caption"] = texto        # <-- guarda EXACTAMENTE lo que escribió, sin tocarlo
+        preview = texto if len(texto) <= 900 else texto[:897] + "..."
         await update.message.reply_text(
-            "✅ Caption actualizado. Elige la variante:",
-            reply_markup=teclado_variantes(len(variantes)),
+            f"✅ *Caption guardado tal cual lo escribiste.*\n\n"
+            f"_Así quedará al publicar:_\n\n{preview}\n\n"
+            f"Ahora elige la variante con los botones del álbum original, "
+            f"o toca ✏️ / 📝 para seguir editando.",
+            parse_mode="Markdown",
+            reply_markup=teclado_variantes(len(p.get("variantes", []))),
         )
         return
 
@@ -1433,13 +1415,40 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ═════════════════ APROBAR (single post) ═════════════════
+    # ═════════════════ APROBAR → mostrar confirmación ═════════════════
     if action == "pub_aprobar":
-        ctx.user_data.pop("editing_design", None)
-        ctx.user_data.pop("editing_caption", None)
         if not p.get("image_bytes"):
             await _edit_msg(query, "⚠️ Primero elige una variante (toca 1️⃣/2️⃣/3️⃣/4️⃣).")
             return
+        caption_preview = p["caption"][:900]
+        await query.message.reply_photo(
+            photo=p["image_bytes"],
+            caption=(
+                "⚠️ *¿Confirmas publicar este post en IG + FB?*\n\n"
+                f"{caption_preview}\n\n"
+                "_Esta acción es pública e irreversible._"
+            ),
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Sí, publicar", callback_data="pub_confirmar"),
+                    InlineKeyboardButton("↩️ No, regresar", callback_data="pub_regresar"),
+                ],
+            ]),
+        )
+        return
+
+    if action == "pub_regresar":
+        await query.message.reply_text(
+            "👍 Regresado al preview. Puedes seguir editando.",
+            reply_markup=teclado_preview(),
+        )
+        return
+
+    # ═════════════════ CONFIRMAR publicación single ═════════════════
+    if action == "pub_confirmar":
+        ctx.user_data.pop("editing_design", None)
+        ctx.user_data.pop("editing_caption", None)
         await _edit_msg(query, "📤 *Subiendo imagen y publicando...*")
         try:
             image_url  = subir_imagen(p["image_bytes"])
@@ -1465,14 +1474,42 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(f"❌ Error al publicar: {e}", parse_mode="Markdown")
         return
 
-    # ═════════════════ APROBAR CARRUSEL ═════════════════
+    # ═════════════════ APROBAR CARRUSEL → confirmación ═════════════════
     if action == "car_aprobar":
-        ctx.user_data.pop("editing_design", None)
-        ctx.user_data.pop("editing_caption", None)
         slide_imgs = p.get("slide_images") or []
         if not slide_imgs:
             await _edit_msg(query, "⚠️ No hay carrusel generado.")
             return
+        caption_preview = p["caption"][:800]
+        await query.message.reply_photo(
+            photo=slide_imgs[0],
+            caption=(
+                f"⚠️ *¿Confirmas publicar este CARRUSEL de {len(slide_imgs)} slides en IG + FB?*\n\n"
+                f"{caption_preview}\n\n"
+                "_Esta acción es pública e irreversible._"
+            ),
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("✅ Sí, publicar carrusel", callback_data="car_confirmar"),
+                    InlineKeyboardButton("↩️ No, regresar",          callback_data="car_regresar"),
+                ],
+            ]),
+        )
+        return
+
+    if action == "car_regresar":
+        await query.message.reply_text(
+            "👍 Regresado al preview del carrusel.",
+            reply_markup=teclado_carrusel(),
+        )
+        return
+
+    # ═════════════════ CONFIRMAR carrusel ═════════════════
+    if action == "car_confirmar":
+        ctx.user_data.pop("editing_design", None)
+        ctx.user_data.pop("editing_caption", None)
+        slide_imgs = p.get("slide_images") or []
         await _edit_msg(query, f"📤 *Subiendo {len(slide_imgs)} slides y publicando carrusel...*")
         try:
             urls = [subir_imagen(b) for b in slide_imgs]
