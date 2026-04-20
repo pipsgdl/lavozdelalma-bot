@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.error
 from pathlib import Path
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -107,8 +107,51 @@ CONTENT_PROMPT = """A partir de esta idea de Paty, genera contenido para publica
 
 IDEA DE PATY: {idea}
 
-Responde ÚNICAMENTE con un JSON válido, sin markdown ni backticks:
-{{"caption": "Caption completo (150-250 palabras). Hook emocional fuerte, desarrollo profundo, CTA suave. Cierra con 5-8 hashtags del nicho.", "frase_imagen": "Frase corta y poderosa para la imagen, máximo 12 palabras. Impactante y memorable.", "categoria": "Una de: reflexion, pregunta, consejo, frase, motivacion"}}"""
+FORMATO DEL CAPTION (obligatorio — estructura de copywriting profesional):
+
+[HOOK — 1 línea, máximo 10 palabras, detiene el scroll con impacto emocional. Sin preguntas obvias. Puede ser afirmación fuerte, confesión, ruptura de expectativa, o verdad incómoda.]
+
+[LÍNEA EN BLANCO]
+
+[DESARROLLO — 3-5 frases cortas, cada una en su propia línea o en bloques de 2 líneas máx. Ritmo lento. Dejar respirar. Una idea por línea. Incluir tensión → giro → alivio o claridad.]
+
+[LÍNEA EN BLANCO]
+
+[REVELACIÓN O GIRO — 1 línea corta que condensa la enseñanza. Es la frase-joya del post.]
+
+[LÍNEA EN BLANCO]
+
+[CTA SUAVE — invitación genuina. Puede ser: una pregunta íntima, un "guárdalo si resonó", "cuéntame", "respira conmigo", etc. No agresivo.]
+
+[LÍNEA EN BLANCO]
+
+.
+.
+.
+
+[HASHTAGS — 6 a 10 hashtags del nicho en español, en una sola línea al final. Mezcla amplios (#bienestar #autoconocimiento) y específicos (#sanacionemocional #psicologiafemenina #mindfulnessmujeres). Siempre incluir #lavozdelalma y #patygodinezcoach.]
+
+REGLAS DE VOZ:
+- Escribe como habla Paty: profundo, cálido, con autoridad emocional sin arrogancia
+- Frases cortas. Ritmo. Aire entre ideas
+- Cero tecnicismos rebuscados
+- Cero clichés tipo "todo pasa por algo"
+- Tuteo ("tú", "contigo", nunca "ustedes")
+
+SOBRE LA FRASE DE LA IMAGEN:
+- DEBE ser coherente con el copy — idealmente extraída o parafraseada del propio texto (hook o revelación)
+- Máximo 10 palabras
+- Que funcione como thumbnail independiente (stand-alone)
+
+SLIDES DE CARRUSEL (si después se pide versión carrusel):
+- Deben narrar el MISMO copy en 4 partes secuenciales:
+  1. Hook (la misma o parecida a frase_imagen)
+  2. Desarrollo parte 1 (tensión o realidad)
+  3. Desarrollo parte 2 / giro (revelación)
+  4. CTA o cierre (invitación, frase-ancla)
+
+Responde ÚNICAMENTE con JSON válido (sin markdown ni backticks):
+{{"caption": "Caption completo con los saltos de línea reales usando \\n", "frase_imagen": "Frase corta 10 palabras máx, extraída del copy", "slides_carrusel": ["Frase slide 1 (hook)", "Frase slide 2 (tensión)", "Frase slide 3 (giro)", "Frase slide 4 (CTA/cierre)"], "categoria": "reflexion|pregunta|consejo|frase|motivacion"}}"""
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -333,8 +376,12 @@ def wrap_text(text: str, font, max_width: int, draw: ImageDraw.Draw) -> list[str
     return lines
 
 
-def generar_imagen(frase: str, template_idx: int | None = None) -> bytes:
-    """Genera imagen de marca 1080×1080 con la frase dada."""
+def generar_imagen(
+    frase: str,
+    template_idx: int | None = None,
+    slide_pos: str | None = None,
+) -> bytes:
+    """Genera imagen de marca 1080×1080. `slide_pos` dibuja un '1/4' discreto."""
     W, H = 1080, 1080
     PAD  = 120
 
@@ -393,11 +440,45 @@ def generar_imagen(frase: str, template_idx: int | None = None) -> bytes:
     draw_sparkle(draw, W // 2 - bw // 2 - 22, H - 120, 6, accent)
     draw_sparkle(draw, W // 2 + bw // 2 + 22, H - 120, 6, accent)
 
+    # ── Indicador de slide (carrusel) ──
+    if slide_pos:
+        font_slide = load_font(FONT_SCRIPT, 20)
+        sb = draw.textbbox((0, 0), slide_pos, font=font_slide)
+        sw = sb[2] - sb[0]
+        draw.text((W - PAD + 10 - sw, 60), slide_pos, fill=accent, font=font_slide)
+
     # Exportar
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf.getvalue()
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  VARIANTES Y CARRUSELES
+# ══════════════════════════════════════════════════════════════════════
+
+def generar_variantes(frase: str, n: int = 4) -> list[dict]:
+    """Genera n variantes de diseño usando templates distintos. Devuelve list de {idx, name, bytes}."""
+    n = min(n, len(TEMPLATES))
+    indices = random.sample(range(len(TEMPLATES)), n)
+    variantes = []
+    for idx in indices:
+        variantes.append({
+            "template_idx":  idx,
+            "template_name": TEMPLATES[idx]["name"],
+            "image_bytes":   generar_imagen(frase, idx),
+        })
+    return variantes
+
+
+def generar_slides_carrusel(frases: list[str], template_idx: int) -> list[bytes]:
+    """Genera N imágenes de carrusel, todas con el mismo template, con marca de slide."""
+    total = len(frases)
+    return [
+        generar_imagen(f, template_idx, slide_pos=f"{i+1}/{total}")
+        for i, f in enumerate(frases)
+    ]
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -474,11 +555,90 @@ def publicar_facebook(image_url: str, caption: str) -> str:
     return r["id"]
 
 
+def publicar_instagram_carrusel(image_urls: list[str], caption: str) -> str:
+    """Publica un carrusel de 2-10 imágenes en Instagram."""
+    import time
+    base = f"https://graph.instagram.com/v21.0/{IG_USER_ID}"
+    children_ids = []
+    for url in image_urls:
+        r = meta_post(f"{base}/media", {
+            "image_url":        url,
+            "is_carousel_item": "true",
+            "access_token":     IG_TOKEN,
+        })
+        if "id" not in r:
+            raise RuntimeError(r.get("error", {}).get("message", str(r)))
+        children_ids.append(r["id"])
+
+    # Contenedor del carrusel
+    r2 = meta_post(f"{base}/media", {
+        "media_type":   "CAROUSEL",
+        "children":     ",".join(children_ids),
+        "caption":      caption,
+        "access_token": IG_TOKEN,
+    })
+    if "id" not in r2:
+        raise RuntimeError(r2.get("error", {}).get("message", str(r2)))
+
+    # Pequeña espera para que IG procese el carrusel antes de publicar
+    time.sleep(3)
+
+    r3 = meta_post(f"{base}/media_publish", {
+        "creation_id":  r2["id"],
+        "access_token": IG_TOKEN,
+    })
+    if "id" not in r3:
+        raise RuntimeError(r3.get("error", {}).get("message", str(r3)))
+    return r3["id"]
+
+
+def publicar_facebook_album(image_urls: list[str], caption: str) -> str:
+    """Publica un álbum (carrusel) en Facebook como post de fotos múltiples."""
+    base = f"https://graph.facebook.com/v21.0/{FB_PAGE_ID}"
+    attached = []
+    for url in image_urls:
+        r = meta_post(f"{base}/photos", {
+            "url":          url,
+            "published":    "false",
+            "access_token": FB_PAGE_TOKEN,
+        })
+        if "id" not in r:
+            raise RuntimeError(r.get("error", {}).get("message", str(r)))
+        attached.append({"media_fbid": r["id"]})
+
+    r2 = meta_post(f"{base}/feed", {
+        "message":        caption,
+        "attached_media": json.dumps(attached),
+        "access_token":   FB_PAGE_TOKEN,
+    })
+    if "id" not in r2:
+        raise RuntimeError(r2.get("error", {}).get("message", str(r2)))
+    return r2["id"]
+
+
 # ══════════════════════════════════════════════════════════════════════
 #  TECLADO DE APROBACIÓN
 # ══════════════════════════════════════════════════════════════════════
 
+def teclado_variantes(n: int = 4) -> InlineKeyboardMarkup:
+    """Tras generar 4 variantes, Paty elige cuál usar o pasa a carrusel/Canva."""
+    emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+    picks = [
+        InlineKeyboardButton(emojis[i], callback_data=f"var_pick_{i}")
+        for i in range(n)
+    ]
+    return InlineKeyboardMarkup([
+        picks,
+        [
+            InlineKeyboardButton("🎠 Hacer carrusel", callback_data="var_carrusel"),
+            InlineKeyboardButton("🎨 Abrir en Canva",  callback_data="var_canva"),
+        ],
+        [InlineKeyboardButton("❌ Cancelar", callback_data="pub_cancelar")],
+    ])
+
+
 def teclado_preview() -> InlineKeyboardMarkup:
+    """Teclado del preview de UN post (después de elegir variante)."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✅ Publicar",       callback_data="pub_aprobar"),
@@ -486,10 +646,29 @@ def teclado_preview() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton("✏️ Editar caption", callback_data="pub_editar"),
-            InlineKeyboardButton("🔄 Otra imagen",    callback_data="pub_regenerar"),
+            InlineKeyboardButton("🔄 Otra variante",  callback_data="pub_regenerar"),
         ],
         [
-            InlineKeyboardButton("❌ Cancelar", callback_data="pub_cancelar"),
+            InlineKeyboardButton("🎠 Hacer carrusel", callback_data="pub_carrusel"),
+            InlineKeyboardButton("🎨 Abrir en Canva",  callback_data="pub_canva"),
+        ],
+        [InlineKeyboardButton("❌ Cancelar", callback_data="pub_cancelar")],
+    ])
+
+
+def teclado_carrusel() -> InlineKeyboardMarkup:
+    """Teclado del preview de un CARRUSEL."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Publicar carrusel", callback_data="car_aprobar"),
+        ],
+        [
+            InlineKeyboardButton("✏️ Ajustar slide", callback_data="car_ajustar"),
+            InlineKeyboardButton("🔄 Otro diseño",   callback_data="car_regenerar"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Volver a 1 post", callback_data="car_volver"),
+            InlineKeyboardButton("❌ Cancelar",        callback_data="pub_cancelar"),
         ],
     ])
 
@@ -499,45 +678,56 @@ def teclado_preview() -> InlineKeyboardMarkup:
 # ══════════════════════════════════════════════════════════════════════
 
 async def pipeline_contenido(update: Update, ctx: ContextTypes.DEFAULT_TYPE, idea: str):
-    """Idea → contenido IA → imagen de marca → preview con botones."""
+    """Idea → copy + 4 variantes de diseño → elegir → preview → publicar."""
     msg = await update.message.reply_text("🧠 Procesando tu idea...")
 
     try:
-        # 1 — Generar caption + frase
-        await msg.edit_text("✨ Generando caption y frase para la imagen...")
+        # 1 — Generar copy, frase de imagen y frases de slides
+        await msg.edit_text("✨ Escribiendo copy y preparando slides...")
         contenido = generar_contenido(idea)
-        caption  = contenido["caption"]
-        frase    = contenido["frase_imagen"]
-        cat      = contenido.get("categoria", "reflexion")
+        caption   = contenido["caption"]
+        frase     = contenido["frase_imagen"]
+        cat       = contenido.get("categoria", "reflexion")
+        slides    = contenido.get("slides_carrusel") or [frase]
 
-        # 2 — Generar imagen de marca
-        await msg.edit_text("🎨 Creando diseño con la identidad de marca...")
-        tpl_idx   = random.randrange(len(TEMPLATES))
-        img_bytes = generar_imagen(frase, tpl_idx)
+        # 2 — Generar 4 variantes de diseño con templates distintos
+        await msg.edit_text("🎨 Generando 4 opciones de diseño...")
+        variantes = generar_variantes(frase, n=4)
 
         # 3 — Guardar en estado
         ctx.user_data["pending"] = {
-            "idea":          idea,
-            "caption":       caption,
-            "frase":         frase,
-            "categoria":     cat,
-            "image_bytes":   img_bytes,
-            "template_idx":  tpl_idx,
-            "template_name": TEMPLATES[tpl_idx]["name"],
+            "idea":       idea,
+            "caption":    caption,
+            "frase":      frase,
+            "categoria":  cat,
+            "slides":     slides,
+            "variantes":  variantes,   # lista de dicts {idx, name, bytes}
+            "modo":       "variantes",
         }
 
-        # 4 — Preview
+        # 4 — Enviar las 4 variantes como álbum
         await msg.delete()
+        media = [
+            InputMediaPhoto(
+                media=v["image_bytes"],
+                caption=(
+                    f"*Opción {i+1}* — _{v['template_name']}_\n\n{caption[:850]}"
+                    if i == 0 else None
+                ),
+                parse_mode="Markdown" if i == 0 else None,
+            )
+            for i, v in enumerate(variantes)
+        ]
+        await update.message.reply_media_group(media=media)
 
-        preview_caption = caption
-        if len(preview_caption) > 950:
-            preview_caption = preview_caption[:947] + "..."
-
-        await update.message.reply_photo(
-            photo=img_bytes,
-            caption=f"📝 *Preview del post:*\n\n{preview_caption}",
+        # 5 — Mensaje de control con los botones de selección
+        await update.message.reply_text(
+            "🎨 *4 opciones de diseño listas.*\n\n"
+            "Toca el número de la que quieras usar, o:\n"
+            "• *🎠 Hacer carrusel* — las 4 slides narrativas\n"
+            "• *🎨 Abrir en Canva* — diseño en tu cuenta para pulir",
             parse_mode="Markdown",
-            reply_markup=teclado_preview(),
+            reply_markup=teclado_variantes(len(variantes)),
         )
 
     except Exception as e:
@@ -648,77 +838,103 @@ async def handle_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-    # ¿Está en modo ajuste de diseño?
+    # ¿Está en modo ajuste de diseño (post único o slide de carrusel)?
     if ctx.user_data.get("editing_design"):
         p = ctx.user_data.get("pending")
         if not p:
             ctx.user_data["editing_design"] = False
+            ctx.user_data.pop("editing_slide", None)
             await update.message.reply_text(
                 "⚠️ No hay post activo. Mándame una idea nueva para empezar."
             )
             return
 
+        slide_idx = ctx.user_data.get("editing_slide")
+        editando_slide = slide_idx is not None
+
         if texto.lower() in {"listo", "ok", "salir", "/listo", "fin", "ya"}:
             ctx.user_data["editing_design"] = False
-            await update.message.reply_photo(
-                photo=p["image_bytes"],
-                caption=(
-                    f"✨ *Diseño final* (_{p.get('template_name', 'N/A')}_)\n\n"
-                    f"{p['caption'][:900]}"
-                ),
-                parse_mode="Markdown",
-                reply_markup=teclado_preview(),
-            )
+            ctx.user_data.pop("editing_slide", None)
+            if editando_slide:
+                await _mostrar_preview_carrusel(update, p)
+            else:
+                await _mostrar_preview_single(update, p, nota="✨ *Ajustes aplicados*")
             return
+
+        # Frase y template actuales (dependen del contexto)
+        if editando_slide:
+            frase_actual = p["slides"][slide_idx]
+        else:
+            frase_actual = p.get("frase", "")
+        tpl_name_actual = p.get("template_name", "random")
 
         msg = await update.message.reply_text("🎨 Aplicando ajuste...")
         try:
-            ajuste = interpretar_ajuste(
-                texto,
-                p["frase"],
-                p.get("template_name", "random"),
-            )
+            ajuste = interpretar_ajuste(texto, frase_actual, tpl_name_actual)
         except Exception as e:
             logger.error(f"Interpretar ajuste falló: {e}", exc_info=True)
             await msg.edit_text(
-                f"❌ No entendí el ajuste: {e}\n\nPrueba algo como _fondo más claro_ o _cambia la frase a 'soy refugio'_.",
+                f"❌ No entendí el ajuste: {e}\n\nPrueba _fondo más claro_ o _cambia la frase a 'soy refugio'_.",
                 parse_mode="Markdown",
             )
             return
 
-        nueva_frase    = ajuste.get("frase") or p["frase"]
-        nuevo_tpl_name = ajuste.get("template") or p.get("template_name")
+        nueva_frase    = ajuste.get("frase") or frase_actual
+        nuevo_tpl_name = ajuste.get("template") or tpl_name_actual
         resumen        = ajuste.get("cambio_resumido", "ajuste aplicado")
-
         tpl_idx = next(
             (i for i, t in enumerate(TEMPLATES) if t["name"] == nuevo_tpl_name),
             p.get("template_idx", 0),
         )
 
         try:
-            new_img = generar_imagen(nueva_frase, tpl_idx)
+            if editando_slide:
+                # Regenerar solo ese slide
+                total = len(p["slides"])
+                new_img = generar_imagen(nueva_frase, tpl_idx, slide_pos=f"{slide_idx+1}/{total}")
+                p["slides"][slide_idx] = nueva_frase
+                p["slide_images"][slide_idx] = new_img
+                # Si el usuario cambió template, aplicamos a todo el carrusel
+                if tpl_idx != p.get("template_idx") and ajuste.get("template"):
+                    p["slide_images"] = generar_slides_carrusel(p["slides"], tpl_idx)
+                p["template_idx"]  = tpl_idx
+                p["template_name"] = TEMPLATES[tpl_idx]["name"]
+            else:
+                new_img = generar_imagen(nueva_frase, tpl_idx)
+                p["frase"]         = nueva_frase
+                p["image_bytes"]   = new_img
+                p["template_idx"]  = tpl_idx
+                p["template_name"] = TEMPLATES[tpl_idx]["name"]
         except Exception as e:
             await msg.edit_text(f"❌ Error generando imagen: {e}")
             return
 
-        p["frase"]         = nueva_frase
-        p["image_bytes"]   = new_img
-        p["template_idx"]  = tpl_idx
-        p["template_name"] = TEMPLATES[tpl_idx]["name"]
-
         await msg.delete()
-        preview = p["caption"] if len(p["caption"]) <= 900 else p["caption"][:897] + "..."
-        await update.message.reply_photo(
-            photo=new_img,
-            caption=(
-                f"🎨 *{resumen}*\n"
-                f"_Template: {p['template_name']}_\n\n"
-                f"{preview}\n\n"
-                "_Sigue ajustando o escribe_ *listo* _para terminar._"
-            ),
-            parse_mode="Markdown",
-            reply_markup=teclado_preview(),
-        )
+
+        if editando_slide:
+            await update.message.reply_photo(
+                photo=p["slide_images"][slide_idx],
+                caption=(
+                    f"🎨 *Slide {slide_idx+1} — {resumen}*\n"
+                    f"_Template: {p['template_name']}_\n\n"
+                    f"_Frase:_ {nueva_frase}\n\n"
+                    "Sigue ajustando o escribe *listo* para ver el carrusel completo."
+                ),
+                parse_mode="Markdown",
+            )
+        else:
+            preview = p["caption"] if len(p["caption"]) <= 900 else p["caption"][:897] + "..."
+            await update.message.reply_photo(
+                photo=new_img,
+                caption=(
+                    f"🎨 *{resumen}*\n"
+                    f"_Template: {p['template_name']}_\n\n"
+                    f"{preview}\n\n"
+                    "_Sigue ajustando o escribe_ *listo*."
+                ),
+                parse_mode="Markdown",
+                reply_markup=teclado_preview(),
+            )
         return
 
     # Pipeline normal: tratar como nueva idea
@@ -779,12 +995,16 @@ async def handle_foto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         contenido = generar_contenido(idea)
 
         ctx.user_data["pending"] = {
-            "idea":        idea,
-            "caption":     contenido["caption"],
-            "frase":       idea,
-            "categoria":   contenido.get("categoria", "reflexion"),
-            "image_bytes": photo_bytes,
-            "is_photo":    True,
+            "idea":          idea,
+            "caption":       contenido["caption"],
+            "frase":         contenido.get("frase_imagen", idea),
+            "slides":        contenido.get("slides_carrusel", []),
+            "categoria":     contenido.get("categoria", "reflexion"),
+            "image_bytes":   photo_bytes,
+            "template_idx":  0,
+            "template_name": "foto-original",
+            "is_photo":      True,
+            "modo":          "single",
         }
 
         preview = contenido["caption"]
@@ -793,7 +1013,7 @@ async def handle_foto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_photo(
             photo=photo_bytes,
-            caption=f"📝 *Preview del post:*\n\n{preview}",
+            caption=f"📝 *Preview del post* (tu foto):\n\n{preview}",
             parse_mode="Markdown",
             reply_markup=teclado_preview(),
         )
@@ -807,6 +1027,69 @@ async def handle_foto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 #  CALLBACKS (BOTONES INLINE)
 # ══════════════════════════════════════════════════════════════════════
 
+async def _edit_msg(query, text: str, markup=None):
+    """Edita mensaje (photo o texto) de forma robusta."""
+    try:
+        await query.edit_message_caption(text, parse_mode="Markdown", reply_markup=markup)
+    except Exception:
+        try:
+            await query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
+        except Exception:
+            await query.message.reply_text(text, parse_mode="Markdown", reply_markup=markup)
+
+
+def _pick_random_template_idx(exclude: int | None = None) -> int:
+    opts = [i for i in range(len(TEMPLATES)) if i != exclude]
+    return random.choice(opts)
+
+
+async def _mostrar_preview_single(update_or_query, p: dict, nota: str = ""):
+    """Envía preview de post único con botones."""
+    msg_target = update_or_query.message if hasattr(update_or_query, "message") else update_or_query
+    caption = p["caption"]
+    preview = caption if len(caption) <= 900 else caption[:897] + "..."
+    head = f"{nota}\n\n" if nota else ""
+    await msg_target.reply_photo(
+        photo=p["image_bytes"],
+        caption=(
+            f"{head}📝 *Preview del post* (_{p.get('template_name','N/A')}_):\n\n{preview}"
+        ),
+        parse_mode="Markdown",
+        reply_markup=teclado_preview(),
+    )
+
+
+async def _mostrar_preview_carrusel(update_or_query, p: dict):
+    """Envía las slides como media_group + mensaje de control."""
+    msg_target = update_or_query.message if hasattr(update_or_query, "message") else update_or_query
+    slide_imgs = p["slide_images"]
+    caption = p["caption"]
+    preview = caption if len(caption) <= 850 else caption[:847] + "..."
+    media = [
+        InputMediaPhoto(
+            media=img,
+            caption=(f"🎠 *Carrusel* (_{p.get('template_name','N/A')}_, {len(slide_imgs)} slides)\n\n{preview}" if i == 0 else None),
+            parse_mode="Markdown" if i == 0 else None,
+        )
+        for i, img in enumerate(slide_imgs)
+    ]
+    await msg_target.reply_media_group(media=media)
+    await msg_target.reply_text(
+        "¿Publicamos el carrusel así, o ajustamos algo?",
+        reply_markup=teclado_carrusel(),
+    )
+
+
+def teclado_slide_picker(n: int) -> InlineKeyboardMarkup:
+    picks = [
+        InlineKeyboardButton(f"Slide {i+1}", callback_data=f"slide_pick_{i}")
+        for i in range(n)
+    ]
+    rows = [picks[i:i+3] for i in range(0, len(picks), 3)]
+    rows.append([InlineKeyboardButton("❌ Cancelar", callback_data="car_cancel_pick")])
+    return InlineKeyboardMarkup(rows)
+
+
 async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -816,112 +1099,240 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     p = ctx.user_data.get("pending")
     if not p:
-        await query.edit_message_caption(
-            "⚠️ No hay post pendiente. Mándame una nueva idea."
-        )
+        await _edit_msg(query, "⚠️ No hay post pendiente. Mándame una nueva idea.")
         return
 
     action = query.data
 
-    # ── APROBAR → Publicar ──────────────────────────────────────────
+    # ═════════════════ SELECCIÓN DE VARIANTES ═════════════════
+    if action.startswith("var_pick_"):
+        idx = int(action.split("_")[-1])
+        variantes = p.get("variantes", [])
+        if idx >= len(variantes):
+            await _edit_msg(query, "⚠️ Variante inválida.")
+            return
+        v = variantes[idx]
+        p["image_bytes"]   = v["image_bytes"]
+        p["template_idx"]  = v["template_idx"]
+        p["template_name"] = v["template_name"]
+        p["modo"]          = "single"
+        await _edit_msg(query, f"✅ Elegiste la opción *{idx+1}* (_{v['template_name']}_). Preparando preview...")
+        await _mostrar_preview_single(query, p)
+        return
+
+    # ═════════════════ HACER CARRUSEL (desde variantes o desde single) ═════════════════
+    if action in ("var_carrusel", "pub_carrusel"):
+        slides = p.get("slides") or [p.get("frase", "")]
+        tpl_idx = p.get("template_idx")
+        if tpl_idx is None:
+            tpl_idx = p.get("variantes", [{}])[0].get("template_idx", 0)
+        await _edit_msg(query, "🎠 Generando carrusel con las slides del copy...")
+        try:
+            slide_imgs = generar_slides_carrusel(slides, tpl_idx)
+        except Exception as e:
+            await _edit_msg(query, f"❌ Error generando carrusel: {e}")
+            return
+        p["slide_images"]  = slide_imgs
+        p["template_idx"]  = tpl_idx
+        p["template_name"] = TEMPLATES[tpl_idx]["name"]
+        p["modo"]          = "carrusel"
+        await _mostrar_preview_carrusel(query, p)
+        return
+
+    # ═════════════════ ABRIR EN CANVA (stub con receta) ═════════════════
+    if action in ("var_canva", "pub_canva"):
+        tpl_idx = p.get("template_idx")
+        if tpl_idx is None:
+            tpl_idx = p.get("variantes", [{}])[0].get("template_idx", 0)
+        tpl = TEMPLATES[tpl_idx]
+        await query.message.reply_text(
+            "🎨 *Receta para Canva* (cópiala y pégala en Canva AI o crea manualmente):\n\n"
+            f"*Formato*: Instagram Post 1080×1080\n"
+            f"*Paleta*:\n"
+            f"  • Fondo: `{tpl['bg']}`\n"
+            f"  • Texto: `{tpl['text']}`\n"
+            f"  • Acento: `{tpl['accent']}`\n\n"
+            f"*Frase principal (tipografía serif/display):*\n_{p['frase']}_\n\n"
+            f"*Marca de agua:* Paty Godínez · La Voz del Alma\n\n"
+            "👉 Crea el diseño en https://www.canva.com/create/instagram-posts/ "
+            "con estos datos. Cuando lo tengas listo, regresa y publica con el "
+            "botón ✅ Publicar (se usará la imagen Pillow actual).\n\n"
+            "_Integración automática con Canva → v3.3_",
+            parse_mode="Markdown",
+        )
+        return
+
+    # ═════════════════ APROBAR (single post) ═════════════════
     if action == "pub_aprobar":
         ctx.user_data.pop("editing_design", None)
         ctx.user_data.pop("editing_caption", None)
-        await query.edit_message_caption(
-            "📤 *Subiendo imagen y publicando...*", parse_mode="Markdown"
-        )
+        if not p.get("image_bytes"):
+            await _edit_msg(query, "⚠️ Primero elige una variante (toca 1️⃣/2️⃣/3️⃣/4️⃣).")
+            return
+        await _edit_msg(query, "📤 *Subiendo imagen y publicando...*")
         try:
             image_url  = subir_imagen(p["image_bytes"])
             caption    = p["caption"]
             resultados = []
-
             try:
                 publicar_instagram(image_url, caption)
                 resultados.append("✅ *Instagram* — ¡Publicado!")
             except Exception as e:
                 resultados.append(f"❌ *Instagram* — {e}")
-
             try:
                 publicar_facebook(image_url, caption)
                 resultados.append("✅ *Facebook* — ¡Publicado!")
             except Exception as e:
                 resultados.append(f"❌ *Facebook* — {e}")
-
             ctx.user_data.pop("pending", None)
-
-            await query.edit_message_caption(
-                "🎉 *Resultado:*\n\n"
-                + "\n".join(resultados)
-                + "\n\n💡 ¡Mándame otra idea cuando quieras!",
+            await query.message.reply_text(
+                "🎉 *Resultado:*\n\n" + "\n".join(resultados) + "\n\n💡 ¡Mándame otra idea cuando quieras!",
                 parse_mode="Markdown",
             )
-
         except Exception as e:
             logger.error(f"Publish error: {e}", exc_info=True)
-            await query.edit_message_caption(
-                f"❌ Error al publicar: {e}\n\nIntenta de nuevo con ✅ Publicar.",
-                parse_mode="Markdown",
-                reply_markup=teclado_preview(),
-            )
+            await query.message.reply_text(f"❌ Error al publicar: {e}", parse_mode="Markdown")
+        return
 
-    # ── EDITAR caption ──────────────────────────────────────────────
-    elif action == "pub_editar":
-        ctx.user_data["editing_caption"] = True
-        await query.edit_message_caption(
-            "✏️ Escribe el nuevo caption y te muestro el preview actualizado:"
-        )
-
-    # ── REGENERAR imagen (rotando template) ─────────────────────────
-    elif action == "pub_regenerar":
-        await query.edit_message_caption("🎨 Generando nueva imagen...")
+    # ═════════════════ APROBAR CARRUSEL ═════════════════
+    if action == "car_aprobar":
+        ctx.user_data.pop("editing_design", None)
+        ctx.user_data.pop("editing_caption", None)
+        slide_imgs = p.get("slide_images") or []
+        if not slide_imgs:
+            await _edit_msg(query, "⚠️ No hay carrusel generado.")
+            return
+        await _edit_msg(query, f"📤 *Subiendo {len(slide_imgs)} slides y publicando carrusel...*")
         try:
-            current = p.get("template_idx", 0)
-            new_idx = (current + random.randint(1, len(TEMPLATES) - 1)) % len(TEMPLATES)
-            new_img = generar_imagen(p["frase"], new_idx)
-            p["image_bytes"]   = new_img
-            p["template_idx"]  = new_idx
-            p["template_name"] = TEMPLATES[new_idx]["name"]
-
-            preview = p["caption"]
-            if len(preview) > 950:
-                preview = preview[:947] + "..."
-
-            await query.message.reply_photo(
-                photo=new_img,
-                caption=f"📝 *Preview actualizado* (_{TEMPLATES[new_idx]['name']}_):\n\n{preview}",
+            urls = [subir_imagen(b) for b in slide_imgs]
+            caption = p["caption"]
+            resultados = []
+            try:
+                publicar_instagram_carrusel(urls, caption)
+                resultados.append("✅ *Instagram* — ¡Carrusel publicado!")
+            except Exception as e:
+                resultados.append(f"❌ *Instagram* — {e}")
+            try:
+                publicar_facebook_album(urls, caption)
+                resultados.append("✅ *Facebook* — ¡Álbum publicado!")
+            except Exception as e:
+                resultados.append(f"❌ *Facebook* — {e}")
+            ctx.user_data.pop("pending", None)
+            await query.message.reply_text(
+                "🎉 *Resultado carrusel:*\n\n" + "\n".join(resultados) + "\n\n💡 ¡Mándame otra idea!",
                 parse_mode="Markdown",
-                reply_markup=teclado_preview(),
             )
         except Exception as e:
-            await query.edit_message_caption(
-                f"❌ Error: {e}",
-                reply_markup=teclado_preview(),
-            )
+            logger.error(f"Carousel publish error: {e}", exc_info=True)
+            await query.message.reply_text(f"❌ Error publicando carrusel: {e}")
+        return
 
-    # ── AJUSTAR diseño (modo conversacional) ────────────────────────
-    elif action == "pub_ajustar":
+    # ═════════════════ CARRUSEL: regenerar (otro template) ═════════════════
+    if action == "car_regenerar":
+        current = p.get("template_idx", 0)
+        new_idx = _pick_random_template_idx(exclude=current)
+        await _edit_msg(query, f"🔄 Regenerando carrusel con template *{TEMPLATES[new_idx]['name']}*...")
+        try:
+            slide_imgs = generar_slides_carrusel(p.get("slides", []), new_idx)
+        except Exception as e:
+            await _edit_msg(query, f"❌ Error: {e}")
+            return
+        p["slide_images"]  = slide_imgs
+        p["template_idx"]  = new_idx
+        p["template_name"] = TEMPLATES[new_idx]["name"]
+        await _mostrar_preview_carrusel(query, p)
+        return
+
+    # ═════════════════ CARRUSEL: volver a post único ═════════════════
+    if action == "car_volver":
+        if not p.get("image_bytes"):
+            # tomar primera slide como imagen del post único
+            if p.get("slide_images"):
+                p["image_bytes"] = p["slide_images"][0]
+        p["modo"] = "single"
+        await _edit_msg(query, "⬅️ Volviste a modo post único. Mostrando preview...")
+        await _mostrar_preview_single(query, p)
+        return
+
+    # ═════════════════ CARRUSEL: elegir slide a ajustar ═════════════════
+    if action == "car_ajustar":
+        n = len(p.get("slide_images", []))
+        if n == 0:
+            await _edit_msg(query, "⚠️ No hay slides.")
+            return
+        await query.message.reply_text(
+            "✏️ ¿Qué slide quieres ajustar?",
+            reply_markup=teclado_slide_picker(n),
+        )
+        return
+
+    if action == "car_cancel_pick":
+        await _edit_msg(query, "Ok, cancelado.")
+        return
+
+    if action.startswith("slide_pick_"):
+        idx = int(action.split("_")[-1])
+        slides = p.get("slides", [])
+        if idx >= len(slides):
+            await _edit_msg(query, "⚠️ Slide inválido.")
+            return
+        ctx.user_data["editing_slide"] = idx
         ctx.user_data["editing_design"] = True
-        await query.edit_message_caption(
-            "🎨 *Modo ajuste de diseño activado*\n\n"
-            "Escríbeme qué cambiar — ejemplos:\n"
-            "• _fondo más claro_\n"
-            "• _usa template bosque_\n"
-            "• _edita la frase: soy mi refugio_\n"
-            "• _cambia a terracota y pon 'respiro y vuelvo'_\n\n"
-            f"🎨 Template actual: *{p.get('template_name', 'N/A')}*\n"
-            f"💬 Frase actual: _{p['frase']}_\n\n"
-            "Cuando termines, escribe *listo* o toca ✅ Publicar en el siguiente preview.",
+        await query.message.reply_text(
+            f"✏️ *Editando slide {idx+1}*\n\n"
+            f"Frase actual: _{slides[idx]}_\n"
+            f"Template: *{p.get('template_name','N/A')}*\n\n"
+            "Dime qué cambiar. Ej: _edita la frase: respira hondo_ o _más oscuro_.\n"
+            "Escribe *listo* cuando termines.",
             parse_mode="Markdown",
         )
+        return
 
-    # ── CANCELAR ────────────────────────────────────────────────────
-    elif action == "pub_cancelar":
+    # ═════════════════ POST ÚNICO: EDITAR CAPTION ═════════════════
+    if action == "pub_editar":
+        ctx.user_data["editing_caption"] = True
+        await query.message.reply_text(
+            "✏️ Escribe el nuevo caption y te muestro el preview actualizado:"
+        )
+        return
+
+    # ═════════════════ POST ÚNICO: REGENERAR (otra variante) ═════════════════
+    if action == "pub_regenerar":
+        current = p.get("template_idx", 0)
+        new_idx = _pick_random_template_idx(exclude=current)
+        try:
+            new_img = generar_imagen(p["frase"], new_idx)
+        except Exception as e:
+            await _edit_msg(query, f"❌ Error: {e}")
+            return
+        p["image_bytes"]   = new_img
+        p["template_idx"]  = new_idx
+        p["template_name"] = TEMPLATES[new_idx]["name"]
+        await _mostrar_preview_single(query, p, nota=f"🔄 Cambié a *{TEMPLATES[new_idx]['name']}*")
+        return
+
+    # ═════════════════ POST ÚNICO: AJUSTAR DISEÑO ═════════════════
+    if action == "pub_ajustar":
+        ctx.user_data["editing_design"] = True
+        ctx.user_data.pop("editing_slide", None)
+        await query.message.reply_text(
+            "🎨 *Modo ajuste de diseño*\n\n"
+            "Dime qué cambiar — ej: _fondo más claro_, _usa bosque_, _edita la frase: soy mi refugio_.\n\n"
+            f"🎨 Template: *{p.get('template_name', 'N/A')}*\n"
+            f"💬 Frase: _{p.get('frase','')}_\n\n"
+            "Escribe *listo* cuando termines.",
+            parse_mode="Markdown",
+        )
+        return
+
+    # ═════════════════ CANCELAR ═════════════════
+    if action == "pub_cancelar":
         ctx.user_data.pop("pending", None)
         ctx.user_data.pop("editing_caption", None)
         ctx.user_data.pop("editing_design", None)
-        await query.edit_message_caption(
-            "🚫 Publicación cancelada.\n💡 ¡Mándame otra idea cuando quieras!"
-        )
+        ctx.user_data.pop("editing_slide", None)
+        await query.message.reply_text("🚫 Cancelado. 💡 Mándame otra idea cuando quieras.")
+        return
 
 
 # ══════════════════════════════════════════════════════════════════════
