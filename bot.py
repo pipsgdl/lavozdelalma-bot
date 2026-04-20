@@ -59,8 +59,8 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 
 # ── Rutas de fuentes + brand ────────────────────────────────────────
 FONTS_DIR   = Path(__file__).parent / "fonts"
-FONT_TITLE  = str(FONTS_DIR / "bruney-season.otf")
-FONT_SCRIPT = str(FONTS_DIR / "New-Icon-Script.otf")
+FONT_TITLE  = str(FONTS_DIR / "PlayfairDisplay.ttf")   # serif clásico (marca Paty)
+FONT_SCRIPT = str(FONTS_DIR / "New-Icon-Script.otf")    # script decorativo
 BRAND_DIR   = Path(__file__).parent / "brand"
 LOGO_PATH   = BRAND_DIR / "logo.png"
 
@@ -467,6 +467,27 @@ def _fetch_bg(url: str) -> bytes:
         return b""
 
 
+def _draw_sparkle_cluster(draw, cx: int, cy: int, color):
+    """Cluster tipo Y (signature del brand de Paty) — 5 sparkles agrupadas."""
+    draw_sparkle(draw, cx, cy, 10, color)
+    draw_sparkle(draw, cx - 22, cy - 18, 6, color)
+    draw_sparkle(draw, cx + 22, cy - 18, 6, color)
+    draw_sparkle(draw, cx - 11, cy + 14, 5, color)
+    draw_sparkle(draw, cx + 11, cy + 14, 5, color)
+
+
+def _fit_font_size(draw, lines: list[str], font_path: str, max_w: int,
+                   start: int = 82, minimum: int = 46) -> ImageFont.FreeTypeFont:
+    """Reduce font-size hasta que todas las líneas quepan en max_w."""
+    size = start
+    while size > minimum:
+        f = load_font(font_path, size)
+        if all((draw.textbbox((0, 0), l, font=f)[2]) <= max_w for l in lines):
+            return f
+        size -= 4
+    return load_font(font_path, minimum)
+
+
 def generar_imagen(
     frase: str,
     template_idx: int | None = None,
@@ -474,8 +495,8 @@ def generar_imagen(
     categoria: str = "reflexion",
     bg_seed: int | None = None,
 ) -> bytes:
-    """Genera imagen 1080×1080 con foto de fondo + overlay + logo real."""
-    W, H = 1080, 1080
+    """Genera imagen 1080×1350 (IG Portrait) con foto atmosférica + Playfair + logo real."""
+    W, H = 1080, 1350   # Portrait IG feed (matchea el estilo de Paty)
 
     tpl = TEMPLATES[template_idx] if template_idx is not None else random.choice(TEMPLATES)
     tint    = hex_to_rgb(tpl["bg"])
@@ -490,15 +511,13 @@ def generar_imagen(
     if bg_data:
         try:
             bg = Image.open(io.BytesIO(bg_data)).convert("RGB").resize((W, H), Image.LANCZOS)
-            bg = bg.filter(ImageFilter.GaussianBlur(radius=1.2))
-            bg = ImageEnhance.Color(bg).enhance(0.6)
-            bg = ImageEnhance.Brightness(bg).enhance(0.82)
-            # Tinte de marca
-            bg = Image.blend(bg, Image.new("RGB", (W, H), tint), 0.58)
-            # Gradiente oscuro hacia abajo para legibilidad
+            bg = bg.filter(ImageFilter.GaussianBlur(radius=1.0))
+            bg = ImageEnhance.Color(bg).enhance(0.55)
+            bg = ImageEnhance.Brightness(bg).enhance(0.85)
+            bg = Image.blend(bg, Image.new("RGB", (W, H), tint), 0.60)
             grad = Image.new("L", (1, H))
             for y in range(H):
-                grad.putpixel((0, y), int(255 * (y / H) ** 2.0 * 0.5))
+                grad.putpixel((0, y), int(255 * (y / H) ** 2.2 * 0.40))
             grad = grad.resize((W, H))
             bg = Image.composite(Image.new("RGB", (W, H), (0, 0, 0)), bg, grad)
         except Exception as e:
@@ -510,46 +529,44 @@ def generar_imagen(
     img  = bg.convert("RGB")
     draw = ImageDraw.Draw(img)
 
-    # Fuentes
-    font_main = load_font(FONT_TITLE, 90)
+    # ── Sparkle cluster arriba (signature) ──
+    _draw_sparkle_cluster(draw, W // 2, 190, accent)
 
-    # ── Líneas decorativas + sparkles ──
-    y_top, y_bot = 170, 820
-    draw.line([(140, y_top), (940, y_top)], fill=accent, width=1)
-    draw.line([(140, y_bot), (940, y_bot)], fill=accent, width=1)
-    for x in (120, 960):
-        draw_sparkle(draw, x, y_top, 10, accent)
-        draw_sparkle(draw, x, y_bot, 10, accent)
-    draw_sparkle(draw, W // 2, 110, 7, accent)
+    # ── Texto principal (Playfair, centrado, auto-sizing) ──
+    # Respetar saltos explícitos del autor; si no hay, wrap automático
+    if "\n" in frase:
+        lines = [l for l in frase.split("\n") if l.strip()]
+    else:
+        # wrap inicial con 82pt, luego ajustar
+        font_probe = load_font(FONT_TITLE, 82)
+        lines = wrap_text(frase, font_probe, W - 260, draw)
 
-    # ── Texto principal (zona superior-centro) ──
-    PAD = 130
-    max_w = W - PAD * 2
-    lines = wrap_text(frase, font_main, max_w, draw)
-    line_h = 108
-    start_y = max(240, (y_bot - y_top - len(lines) * line_h) // 2 + y_top - 60)
+    font_main = _fit_font_size(draw, lines, FONT_TITLE, W - 260, start=82, minimum=46)
+    line_h = int(font_main.size * 1.25)
+    total_h = len(lines) * line_h
+    start_y = (H - total_h) // 2 - 50
     for i, line in enumerate(lines):
         bb = draw.textbbox((0, 0), line, font=font_main)
         lw = bb[2] - bb[0]
         draw.text(((W - lw) // 2, start_y + i * line_h), line, fill=txt_col, font=font_main)
 
-    # ── Logo real (abajo centrado, reemplaza marca de agua textual) ──
+    # ── Logo real abajo (HQ, downscale) ──
     logo = _load_logo()
     if logo is not None:
         logo_copy = logo.copy()
-        logo_copy.thumbnail((220, 220), Image.LANCZOS)
+        logo_copy.thumbnail((260, 260), Image.LANCZOS)
         lw, lh = logo_copy.size
         rgba = img.convert("RGBA")
-        rgba.alpha_composite(logo_copy, ((W - lw) // 2, 870))
+        rgba.alpha_composite(logo_copy, ((W - lw) // 2, H - 240))
         img = rgba.convert("RGB")
         draw = ImageDraw.Draw(img)
 
     # ── Indicador de slide (carrusel) ──
     if slide_pos:
-        font_slide = load_font(FONT_SCRIPT, 22)
+        font_slide = load_font(FONT_SCRIPT, 26)
         sb = draw.textbbox((0, 0), slide_pos, font=font_slide)
         sw = sb[2] - sb[0]
-        draw.text((W - 140 - sw, 80), slide_pos, fill=accent, font=font_slide)
+        draw.text((W - 140 - sw, 90), slide_pos, fill=accent, font=font_slide)
 
     # Exportar
     buf = io.BytesIO()
