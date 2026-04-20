@@ -441,8 +441,8 @@ PHOTO_POOL: dict[str, list[str]] = {
     "introspeccion": [
         "https://images.unsplash.com/photo-1513002749550-c59d786b8e6c",  # ventana lluvia
         "https://images.unsplash.com/photo-1499209974431-9dddcece7f88",  # silueta luz
-        "https://images.unsplash.com/photo-1495973879283-6dbe2e8797dd",  # niebla camino
         "https://images.unsplash.com/photo-1444492417251-9c84a5fa18e0",  # habitación suave
+        "https://images.unsplash.com/photo-1519638399535-1b036603ac77",  # luz tenue
     ],
     "esperanza": [
         "https://images.unsplash.com/photo-1506905925346-21bda4d32df4",  # amanecer
@@ -848,28 +848,42 @@ async def pipeline_contenido(update: Update, ctx: ContextTypes.DEFAULT_TYPE, ide
             "modo":       "variantes",
         }
 
-        # 4 — Enviar las 4 variantes como álbum
-        await msg.delete()
+        # 4 — Enviar las 4 variantes como álbum (sin markdown para evitar fallos por chars)
+        try:
+            await msg.delete()
+        except Exception:
+            pass  # no-op si ya se borró
+
+        # Primer caption: encabezado simple + copy SIN parse_mode (emojis raw ok)
+        primer_caption = f"Opción 1 — {variantes[0]['template_name']}\n\n{caption[:900]}"
         media = [
             InputMediaPhoto(
                 media=v["image_bytes"],
-                caption=(
-                    f"*Opción {i+1}* — _{v['template_name']}_\n\n{caption[:850]}"
-                    if i == 0 else None
-                ),
-                parse_mode="Markdown" if i == 0 else None,
+                caption=(primer_caption if i == 0 else None),
             )
             for i, v in enumerate(variantes)
         ]
-        await update.message.reply_media_group(media=media)
+        try:
+            await update.message.reply_media_group(media=media)
+        except Exception as e:
+            logger.error("Fallo reply_media_group: %s", e, exc_info=True)
+            # fallback: mandar cada foto sola
+            for i, v in enumerate(variantes):
+                try:
+                    await update.message.reply_photo(
+                        photo=v["image_bytes"],
+                        caption=f"Opción {i+1} — {v['template_name']}" + (f"\n\n{caption[:800]}" if i == 0 else ""),
+                    )
+                except Exception as ee:
+                    logger.error("Fallback photo %d falló: %s", i, ee)
 
-        # 5 — Mensaje de control con los botones de selección
+        # 5 — Mensaje de control con los botones de selección (sin markdown conflictivo)
         await update.message.reply_text(
-            "🎨 *4 opciones de diseño listas.*\n\n"
-            "Toca el número de la que quieras usar, o:\n"
-            "• *🎠 Hacer carrusel* — las 4 slides narrativas\n"
-            "• *🎨 Abrir en Canva* — diseño en tu cuenta para pulir",
-            parse_mode="Markdown",
+            "🎨 4 opciones de diseño listas.\n\n"
+            "Toca el número que quieras, o:\n"
+            "• 🎠 Hacer carrusel — 4 slides narrativas\n"
+            "• ✏️ Editar frase — cambia el texto de la imagen\n"
+            "• 📝 Editar caption — cambia el texto del post",
             reply_markup=teclado_variantes(len(variantes)),
         )
 
