@@ -1447,25 +1447,27 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ═════════════════ APROBAR → mostrar confirmación ═════════════════
+    # ═════════════════ APROBAR → selector de plataforma ═════════════════
     if action == "pub_aprobar":
         if not p.get("image_bytes"):
             await _edit_msg(query, "⚠️ Primero elige una variante (toca 1️⃣/2️⃣/3️⃣/4️⃣).")
             return
-        caption_preview = p["caption"][:900]
+        caption_preview = p["caption"][:700]
         await query.message.reply_photo(
             photo=p["image_bytes"],
             caption=(
-                "⚠️ *¿Confirmas publicar este post en IG + FB?*\n\n"
+                "⚠️ *¿Dónde publicamos?*\n\n"
                 f"{caption_preview}\n\n"
-                "_Esta acción es pública e irreversible._"
+                "_La publicación es pública e irreversible._"
             ),
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔀 Ambos (IG + FB)", callback_data="pub_go_ambos")],
                 [
-                    InlineKeyboardButton("✅ Sí, publicar", callback_data="pub_confirmar"),
-                    InlineKeyboardButton("↩️ No, regresar", callback_data="pub_regresar"),
+                    InlineKeyboardButton("📷 Solo Instagram", callback_data="pub_go_ig"),
+                    InlineKeyboardButton("📘 Solo Facebook",  callback_data="pub_go_fb"),
                 ],
+                [InlineKeyboardButton("↩️ Regresar", callback_data="pub_regresar")],
             ]),
         )
         return
@@ -1477,30 +1479,47 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ═════════════════ CONFIRMAR publicación single ═════════════════
-    if action == "pub_confirmar":
+    # ═════════════════ PUBLICAR según plataforma elegida ═════════════════
+    if action in ("pub_go_ambos", "pub_go_ig", "pub_go_fb"):
         ctx.user_data.pop("editing_design", None)
         ctx.user_data.pop("editing_caption", None)
-        await _edit_msg(query, "📤 *Subiendo imagen y publicando...*")
+        destinos = {
+            "pub_go_ambos": ("Instagram + Facebook", ["ig", "fb"]),
+            "pub_go_ig":    ("solo Instagram",       ["ig"]),
+            "pub_go_fb":    ("solo Facebook",        ["fb"]),
+        }[action]
+        await _edit_msg(query, f"📤 *Subiendo imagen y publicando en {destinos[0]}...*")
         try:
             image_url  = subir_imagen(p["image_bytes"])
             caption    = p["caption"]
             resultados = []
-            try:
-                publicar_instagram(image_url, caption)
-                resultados.append("✅ *Instagram* — ¡Publicado!")
-            except Exception as e:
-                resultados.append(f"❌ *Instagram* — {e}")
-            try:
-                publicar_facebook(image_url, caption)
-                resultados.append("✅ *Facebook* — ¡Publicado!")
-            except Exception as e:
-                resultados.append(f"❌ *Facebook* — {e}")
-            ctx.user_data.pop("pending", None)
-            await query.message.reply_text(
-                "🎉 *Resultado:*\n\n" + "\n".join(resultados) + "\n\n💡 ¡Mándame otra idea cuando quieras!",
-                parse_mode="Markdown",
-            )
+            if "ig" in destinos[1]:
+                try:
+                    publicar_instagram(image_url, caption)
+                    resultados.append("✅ *Instagram* — ¡Publicado!")
+                except Exception as e:
+                    resultados.append(f"❌ *Instagram* — {e}")
+            if "fb" in destinos[1]:
+                try:
+                    publicar_facebook(image_url, caption)
+                    resultados.append("✅ *Facebook* — ¡Publicado!")
+                except Exception as e:
+                    resultados.append(f"❌ *Facebook* — {e}")
+            # Mantener pending si una plataforma falló → fácil reintento
+            if any(r.startswith("❌") for r in resultados):
+                await query.message.reply_text(
+                    "🎯 *Resultado parcial:*\n\n" + "\n".join(resultados) +
+                    "\n\n💡 Toca ✅ Publicar de nuevo y elige solo la plataforma que falló.",
+                    parse_mode="Markdown",
+                    reply_markup=teclado_preview(),
+                )
+            else:
+                ctx.user_data.pop("pending", None)
+                await query.message.reply_text(
+                    "🎉 *Resultado:*\n\n" + "\n".join(resultados) +
+                    "\n\n💡 ¡Mándame otra idea cuando quieras!",
+                    parse_mode="Markdown",
+                )
         except Exception as e:
             logger.error(f"Publish error: {e}", exc_info=True)
             await query.message.reply_text(f"❌ Error al publicar: {e}", parse_mode="Markdown")
