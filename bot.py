@@ -671,6 +671,36 @@ def meta_post(url: str, params: dict) -> dict:
             raise RuntimeError(f"Meta {e.code}: {body[:300]}") from None
 
 
+def _wait_ig_media_ready(creation_id: str, max_tries: int = 20, delay: float = 2.0) -> None:
+    """Espera a que un media container de IG tenga status FINISHED antes de publicar.
+
+    Evita el error "The media is not ready for publishing" cuando Meta aún
+    está procesando la imagen. Total max wait: ~40 segundos.
+    """
+    import time
+    url = (
+        f"https://graph.instagram.com/v21.0/{creation_id}"
+        f"?fields=status_code&access_token={urllib.parse.quote(IG_TOKEN, safe='')}"
+    )
+    for i in range(max_tries):
+        try:
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read())
+            status = data.get("status_code", "")
+            if status == "FINISHED":
+                return
+            if status == "ERROR":
+                raise RuntimeError(f"IG container reporta ERROR: {data}")
+            # IN_PROGRESS, PUBLISHED, EXPIRED → seguimos esperando solo si IN_PROGRESS
+            if status == "EXPIRED":
+                raise RuntimeError("IG container EXPIRÓ antes de procesar")
+        except urllib.error.HTTPError:
+            pass  # reintentar
+        time.sleep(delay)
+    raise RuntimeError(f"IG no procesó el contenedor en {max_tries * delay}s")
+
+
 def publicar_instagram(image_url: str, caption: str) -> str:
     base = f"https://graph.instagram.com/v21.0/{IG_USER_ID}"
     r1 = meta_post(f"{base}/media", {
@@ -678,6 +708,8 @@ def publicar_instagram(image_url: str, caption: str) -> str:
     })
     if "id" not in r1:
         raise RuntimeError(r1.get("error", {}).get("message", str(r1)))
+    # Esperar a que IG procese el contenedor antes de publicar
+    _wait_ig_media_ready(r1["id"])
     r2 = meta_post(f"{base}/media_publish", {
         "creation_id": r1["id"], "access_token": IG_TOKEN,
     })
@@ -720,8 +752,8 @@ def publicar_instagram_carrusel(image_urls: list[str], caption: str) -> str:
     if "id" not in r2:
         raise RuntimeError(r2.get("error", {}).get("message", str(r2)))
 
-    # Pequeña espera para que IG procese el carrusel antes de publicar
-    time.sleep(3)
+    # Polling hasta que IG termine de procesar el carrusel
+    _wait_ig_media_ready(r2["id"])
 
     r3 = meta_post(f"{base}/media_publish", {
         "creation_id":  r2["id"],
