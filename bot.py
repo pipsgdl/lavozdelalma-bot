@@ -126,51 +126,67 @@ CONTENT_PROMPT = """A partir de esta idea de Paty, genera contenido para publica
 
 IDEA DE PATY: {idea}
 
-FORMATO DEL CAPTION (obligatorio — estructura de copywriting profesional):
+═══ ESTRUCTURA OBLIGATORIA DEL CAPTION ═══
 
-[HOOK — 1 línea, máximo 10 palabras, detiene el scroll con impacto emocional. Sin preguntas obvias. Puede ser afirmación fuerte, confesión, ruptura de expectativa, o verdad incómoda.]
+Línea 1 → HOOK con EMOJI al inicio (máx 10 palabras). Impacto emocional. Ej:
+   "✨ Hay un tipo de amor que solo se nombra en silencio."
+   "🌿 La calma no es ausencia de tormenta."
+   "💔 A veces el miedo se disfraza de prudencia."
 
-[LÍNEA EN BLANCO]
+[línea vacía]
 
-[DESARROLLO — 3-5 frases cortas, cada una en su propia línea o en bloques de 2 líneas máx. Ritmo lento. Dejar respirar. Una idea por línea. Incluir tensión → giro → alivio o claridad.]
+Bloque de 3-5 frases cortas (cada una en su propia línea). Ritmo lento. Usa 2-3 emojis SUTILES intercalados (no al inicio de todas). Ej:
+   "Lo que no se nombra, crece."
+   "🌙 Y dentro de ti hay noches enteras."
+   "Noches que no sabes cómo habitar."
 
-[LÍNEA EN BLANCO]
+[línea vacía]
 
-[REVELACIÓN O GIRO — 1 línea corta que condensa la enseñanza. Es la frase-joya del post.]
+→ REVELACIÓN con emoji de énfasis. 1 línea, la frase-joya. Ej:
+   "💫 Regresar a ti es el verdadero viaje."
+   "🌸 Nombrar tu dolor también es sanarlo."
 
-[LÍNEA EN BLANCO]
+[línea vacía]
 
-[CTA SUAVE — invitación genuina. Puede ser: una pregunta íntima, un "guárdalo si resonó", "cuéntame", "respira conmigo", etc. No agresivo.]
+CTA íntimo, invitación suave, puede llevar emoji:
+   "💬 Cuéntame qué nombras hoy."
+   "🪷 Guarda esto si te tocó."
+   "🤎 Comparte con quien necesite oírlo."
 
-[LÍNEA EN BLANCO]
+[línea vacía]
 
 .
 .
 .
 
-[HASHTAGS — 6 a 10 hashtags del nicho en español, en una sola línea al final. Mezcla amplios (#bienestar #autoconocimiento) y específicos (#sanacionemocional #psicologiafemenina #mindfulnessmujeres). Siempre incluir #lavozdelalma y #patygodinezcoach.]
+Línea final de hashtags (8-10 tags). SIEMPRE incluir:
+   #LaVozDelAlma #PatyGodinezCoach
+Más 6-8 del nicho: #BienestarEmocional #SanacionEmocional #Autocompasion #Mindfulness #Neurociencia #Autoconocimiento #PsicologiaFemenina #CrecimientoPersonal #SaludMental #RegulacionEmocional #VidaConsciente
 
-REGLAS DE VOZ:
-- Escribe como habla Paty: profundo, cálido, con autoridad emocional sin arrogancia
+═══ REGLAS DE VOZ ═══
+- Profundo, cálido, con autoridad emocional. Sin arrogancia
 - Frases cortas. Ritmo. Aire entre ideas
-- Cero tecnicismos rebuscados
+- Tuteo siempre ("tú", "contigo", nunca "ustedes")
 - Cero clichés tipo "todo pasa por algo"
-- Tuteo ("tú", "contigo", nunca "ustedes")
+- Cero tecnicismos
 
-SOBRE LA FRASE DE LA IMAGEN:
-- DEBE ser coherente con el copy — idealmente extraída o parafraseada del propio texto (hook o revelación)
-- Máximo 10 palabras
-- Que funcione como thumbnail independiente (stand-alone)
+═══ EMOJIS PERMITIDOS (usa con medida) ═══
+✨ 🌿 🪷 💫 🌙 🌸 🤎 🕊 💬 🌾 🌊 🌅 💔 🔥 🌀 🫶 🧡 💭
 
-SLIDES DE CARRUSEL (si después se pide versión carrusel):
-- Deben narrar el MISMO copy en 4 partes secuenciales:
-  1. Hook (la misma o parecida a frase_imagen)
-  2. Desarrollo parte 1 (tensión o realidad)
-  3. Desarrollo parte 2 / giro (revelación)
-  4. CTA o cierre (invitación, frase-ancla)
+═══ FRASE DE LA IMAGEN ═══
+- MÁX 10 palabras
+- Coherente con el copy (extraída/parafraseada del hook o la revelación)
+- SIN emojis (la imagen es tipográfica pura)
 
-Responde ÚNICAMENTE con JSON válido (sin markdown ni backticks):
-{{"caption": "Caption completo con los saltos de línea reales usando \\n", "frase_imagen": "Frase corta 10 palabras máx, extraída del copy", "slides_carrusel": ["Frase slide 1 (hook)", "Frase slide 2 (tensión)", "Frase slide 3 (giro)", "Frase slide 4 (CTA/cierre)"], "categoria": "reflexion|pregunta|consejo|frase|motivacion"}}"""
+═══ SLIDES DEL CARRUSEL (4 frases narrativas) ═══
+1. Hook (igual o parecido a frase_imagen)
+2. Tensión / realidad que duele
+3. Giro / revelación
+4. Cierre / CTA-ancla
+
+═══ FORMATO DE RESPUESTA ═══
+Responde ÚNICAMENTE JSON válido (sin markdown ni backticks):
+{{"caption": "caption completo con \\n reales y emojis", "frase_imagen": "frase corta sin emoji (máx 10 palabras)", "slides_carrusel": ["slide1","slide2","slide3","slide4"], "categoria": "reflexion|pregunta|consejo|frase|motivacion"}}"""
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -753,6 +769,10 @@ def teclado_variantes(n: int = 4) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         picks,
         [
+            InlineKeyboardButton("✏️ Editar frase",   callback_data="var_edit_frase"),
+            InlineKeyboardButton("📝 Editar caption", callback_data="var_edit_caption"),
+        ],
+        [
             InlineKeyboardButton("🎠 Hacer carrusel", callback_data="var_carrusel"),
             InlineKeyboardButton("🎨 Abrir en Canva",  callback_data="var_canva"),
         ],
@@ -946,7 +966,54 @@ async def handle_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     texto = update.message.text.strip()
 
-    # ¿Está editando caption?
+    # ¿Está editando la frase de la imagen desde variantes? → regenerar las 4
+    if ctx.user_data.get("editing_frase_variantes"):
+        ctx.user_data["editing_frase_variantes"] = False
+        p = ctx.user_data.get("pending")
+        if not p:
+            await update.message.reply_text("⚠️ No hay post activo. Mándame una idea nueva.")
+            return
+        msg = await update.message.reply_text("🎨 Regenerando las 4 variantes con la nueva frase...")
+        try:
+            cat = p.get("categoria", "reflexion")
+            variantes = generar_variantes(texto, n=4, categoria=cat)
+            p["frase"]     = texto
+            p["variantes"] = variantes
+            p["modo"]      = "variantes"
+        except Exception as e:
+            await msg.edit_text(f"❌ Error: {e}")
+            return
+        await msg.delete()
+        caption = p["caption"]
+        media = [
+            InputMediaPhoto(
+                media=v["image_bytes"],
+                caption=(f"*Opción {i+1}* — _{v['template_name']}_\n\n{caption[:850]}" if i == 0 else None),
+                parse_mode="Markdown" if i == 0 else None,
+            )
+            for i, v in enumerate(variantes)
+        ]
+        await update.message.reply_media_group(media=media)
+        await update.message.reply_text(
+            "✨ *Frase actualizada.* Elige tu opción:",
+            parse_mode="Markdown",
+            reply_markup=teclado_variantes(len(variantes)),
+        )
+        return
+
+    # ¿Está editando caption desde variantes? (solo actualiza el texto)
+    if ctx.user_data.get("editing_caption_variantes"):
+        ctx.user_data["editing_caption_variantes"] = False
+        p = ctx.user_data.get("pending")
+        if p:
+            p["caption"] = texto
+            await update.message.reply_text(
+                "✅ *Caption actualizado.* Sigue eligiendo tu variante con los botones del álbum de arriba.",
+                parse_mode="Markdown",
+            )
+        return
+
+    # ¿Está editando caption del post único?
     if ctx.user_data.get("editing_caption"):
         ctx.user_data["editing_caption"] = False
         p = ctx.user_data.get("pending")
@@ -1245,6 +1312,27 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         p["modo"]          = "single"
         await _edit_msg(query, f"✅ Elegiste la opción *{idx+1}* (_{v['template_name']}_). Preparando preview...")
         await _mostrar_preview_single(query, p)
+        return
+
+    # ═════════════════ EDITAR FRASE (desde pantalla de variantes) ═════════════════
+    if action == "var_edit_frase":
+        ctx.user_data["editing_frase_variantes"] = True
+        await query.message.reply_text(
+            "✏️ *Editar frase de la imagen*\n\n"
+            f"Frase actual: _{p.get('frase','')}_\n\n"
+            "Escribe la nueva frase (máx 10 palabras) y te regenero las 4 variantes con ese texto.",
+            parse_mode="Markdown",
+        )
+        return
+
+    if action == "var_edit_caption":
+        ctx.user_data["editing_caption_variantes"] = True
+        await query.message.reply_text(
+            "📝 *Editar caption*\n\n"
+            "Escribe el nuevo caption completo (con los emojis y hashtags que quieras) "
+            "y se aplicará al post cuando lo publiques.",
+            parse_mode="Markdown",
+        )
         return
 
     # ═════════════════ HACER CARRUSEL (desde variantes o desde single) ═════════════════

@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar código y assets
 COPY bot.py .
 COPY fonts/ fonts/
+COPY brand/ brand/
 
 # Health check — verifica que Python pueda importar el bot
 HEALTHCHECK --interval=60s --timeout=10s --retries=3 \
