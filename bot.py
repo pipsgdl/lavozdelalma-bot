@@ -414,11 +414,12 @@ def wrap_text(text: str, font, max_width: int, draw: ImageDraw.Draw) -> list[str
 # ── Pool curado de fotos de fondo por mood ──────────────────────────
 # Todas son CC0 de Unsplash (sin API key, URLs directas)
 PHOTO_POOL: dict[str, list[str]] = {
+    # Solo naturaleza / texturas / elementos — nunca figuras masculinas
     "calma": [
         "https://images.unsplash.com/photo-1518199266791-5375a83190b7",  # bokeh corazones
         "https://images.unsplash.com/photo-1508923567004-3a6b8004f3d7",  # cielo rosa
-        "https://images.unsplash.com/photo-1507525428034-b723cf961d3e",  # playa calma
         "https://images.unsplash.com/photo-1519681393784-d120267933ba",  # montañas nevadas
+        "https://images.unsplash.com/photo-1458682625221-3a45f8a844c7",  # campo sereno
     ],
     "enraizar": [
         "https://images.unsplash.com/photo-1441974231531-c6227db76b6e",  # bosque niebla
@@ -428,9 +429,9 @@ PHOTO_POOL: dict[str, list[str]] = {
     ],
     "ternura": [
         "https://images.unsplash.com/photo-1490750967868-88aa4486c946",  # flores amarillas
-        "https://images.unsplash.com/photo-1487530811176-3780de880c2d",  # manos flores
         "https://images.unsplash.com/photo-1469474968028-56623f02e42e",  # atardecer cálido
         "https://images.unsplash.com/photo-1462275646964-a0e3386b89fa",  # peonías
+        "https://images.unsplash.com/photo-1508610048659-a06b669e3321",  # flores suaves
     ],
     "fuerza": [
         "https://images.unsplash.com/photo-1506744038136-46273834b3fb",  # lago montaña
@@ -440,15 +441,15 @@ PHOTO_POOL: dict[str, list[str]] = {
     ],
     "introspeccion": [
         "https://images.unsplash.com/photo-1513002749550-c59d786b8e6c",  # ventana lluvia
-        "https://images.unsplash.com/photo-1499209974431-9dddcece7f88",  # silueta luz
         "https://images.unsplash.com/photo-1444492417251-9c84a5fa18e0",  # habitación suave
-        "https://images.unsplash.com/photo-1519638399535-1b036603ac77",  # luz tenue
+        "https://images.unsplash.com/photo-1490750967868-88aa4486c946",  # flores amarillas (reuse)
+        "https://images.unsplash.com/photo-1454875392684-61e2d3cbfcfc",  # textura suave
     ],
     "esperanza": [
         "https://images.unsplash.com/photo-1506905925346-21bda4d32df4",  # amanecer
-        "https://images.unsplash.com/photo-1507525428034-b723cf961d3e",  # luz mar
         "https://images.unsplash.com/photo-1470252649378-9c29740c9fa8",  # cielo rayo sol
         "https://images.unsplash.com/photo-1497436072909-60f360e1d4b1",  # lago al alba
+        "https://images.unsplash.com/photo-1472214103451-9374bd1c798e",  # amanecer neblina
     ],
 }
 
@@ -1341,7 +1342,11 @@ async def handle_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     p = ctx.user_data.get("pending")
     if not p:
-        await _edit_msg(query, "⚠️ No hay post pendiente. Mándame una nueva idea.")
+        await _edit_msg(
+            query,
+            "⚠️ Este post ya se cerró o el bot se reinició.\n"
+            "💡 Mándame tu idea de nuevo (texto o audio) y regenero todo."
+        )
         return
 
     action = query.data
