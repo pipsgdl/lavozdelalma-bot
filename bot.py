@@ -443,7 +443,7 @@ PHOTO_POOL: dict[str, list[str]] = {
         "https://images.unsplash.com/photo-1513002749550-c59d786b8e6c",  # ventana lluvia
         "https://images.unsplash.com/photo-1444492417251-9c84a5fa18e0",  # habitación suave
         "https://images.unsplash.com/photo-1490750967868-88aa4486c946",  # flores amarillas (reuse)
-        "https://images.unsplash.com/photo-1454875392684-61e2d3cbfcfc",  # textura suave
+        "https://images.unsplash.com/photo-1501139083538-0139583c060f",  # luz dorada tenue
     ],
     "esperanza": [
         "https://images.unsplash.com/photo-1506905925346-21bda4d32df4",  # amanecer
