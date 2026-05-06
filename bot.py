@@ -283,8 +283,44 @@ def _parse_json_response(raw: str) -> dict:
         raise ValueError(f"No se pudo parsear respuesta del LLM: {raw[:300]}")
 
 
-def generar_contenido(idea: str) -> dict:
-    """Genera caption + frase para imagen desde una idea."""
+FRASE_EXTRACT_PROMPT = """Paty te da un caption ya escrito por ella. NO lo cambies.
+
+Solo necesito que extraigas:
+1. Una frase corta (máx 10 palabras, SIN emojis) para usar como TÍTULO en la imagen — preferentemente extraída del hook o la frase más fuerte del propio texto
+2. 4 frases narrativas para slides de carrusel (también extraídas/derivadas del MISMO caption: hook → tensión → giro → cierre)
+3. La categoría: reflexion | pregunta | consejo | frase | motivacion
+
+CAPTION DE PATY:
+{caption}
+
+Responde SOLO JSON (sin backticks ni markdown):
+{{"frase_imagen": "...", "slides_carrusel": ["...","...","...","..."], "categoria": "..."}}"""
+
+
+def _parece_caption_listo(texto: str) -> bool:
+    """Detecta si el texto ya es un caption hecho (no una idea suelta)."""
+    t = texto.strip()
+    if "#" in t and t.count("#") >= 3:           # 3+ hashtags
+        return True
+    if len(t.split()) >= 50:                      # >=50 palabras = post largo
+        return True
+    if t.count("\n") >= 4 and len(t) > 200:       # estructura multilínea con cuerpo
+        return True
+    return False
+
+
+def generar_contenido(idea: str, force_literal: bool = False) -> dict:
+    """Genera caption + frase. Si Paty mandó un caption ya hecho, lo respeta literal."""
+    if force_literal or _parece_caption_listo(idea):
+        # Modo respeto: la IA solo extrae frase + slides + categoría
+        raw = chat_ia([
+            {"role": "user", "content": FRASE_EXTRACT_PROMPT.format(caption=idea)},
+        ], max_tokens=400, temperature=0.2)
+        data = _parse_json_response(raw)
+        data["caption"] = idea  # caption EXACTO de Paty, sin tocar
+        logger.info("Modo respeto: usando caption literal de Paty")
+        return data
+    # Modo normal: la IA escribe todo
     raw = chat_ia([
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user",   "content": CONTENT_PROMPT.format(idea=idea)},
@@ -415,41 +451,78 @@ def wrap_text(text: str, font, max_width: int, draw: ImageDraw.Draw) -> list[str
 # Todas son CC0 de Unsplash (sin API key, URLs directas)
 PHOTO_POOL: dict[str, list[str]] = {
     # Solo naturaleza / texturas / elementos — nunca figuras masculinas
+    # 10+ fotos por mood para máxima variedad
     "calma": [
         "https://images.unsplash.com/photo-1518199266791-5375a83190b7",  # bokeh corazones
         "https://images.unsplash.com/photo-1508923567004-3a6b8004f3d7",  # cielo rosa
         "https://images.unsplash.com/photo-1519681393784-d120267933ba",  # montañas nevadas
         "https://images.unsplash.com/photo-1458682625221-3a45f8a844c7",  # campo sereno
+        "https://images.unsplash.com/photo-1546587348-d12660c30c50",     # niebla suave
+        "https://images.unsplash.com/photo-1500382017468-9049fed747ef",  # cielo nubes
+        "https://images.unsplash.com/photo-1505144808419-1957a94ca61e",  # mar calmo
+        "https://images.unsplash.com/photo-1482192596544-9eb780fc7f66",  # nieve suave
+        "https://images.unsplash.com/photo-1478719059408-592965723cbc",  # bokeh cálido
+        "https://images.unsplash.com/photo-1557682250-33bd709cbe85",     # pastel abstract
     ],
     "enraizar": [
         "https://images.unsplash.com/photo-1441974231531-c6227db76b6e",  # bosque niebla
         "https://images.unsplash.com/photo-1511497584788-876760111969",  # árbol luz
         "https://images.unsplash.com/photo-1500622944204-b135684e99fd",  # bosque
         "https://images.unsplash.com/photo-1448375240586-882707db888b",  # árboles
+        "https://images.unsplash.com/photo-1426604966848-d7adac402bff",  # bosque verde
+        "https://images.unsplash.com/photo-1518837695005-2083093ee35b",  # camino bosque
+        "https://images.unsplash.com/photo-1502082553048-f009c37129b9",  # tronco musgo
+        "https://images.unsplash.com/photo-1473773508845-188df298d2d1",  # raíces tierra
+        "https://images.unsplash.com/photo-1551632811-561732d1e306",     # naturaleza profunda
+        "https://images.unsplash.com/photo-1448375240586-882707db888b",  # bosque luz
     ],
     "ternura": [
         "https://images.unsplash.com/photo-1490750967868-88aa4486c946",  # flores amarillas
         "https://images.unsplash.com/photo-1469474968028-56623f02e42e",  # atardecer cálido
         "https://images.unsplash.com/photo-1462275646964-a0e3386b89fa",  # peonías
         "https://images.unsplash.com/photo-1508610048659-a06b669e3321",  # flores suaves
+        "https://images.unsplash.com/photo-1490750967868-88aa4486c946",  # campo amarillo
+        "https://images.unsplash.com/photo-1490750967868-88aa4486c946",
+        "https://images.unsplash.com/photo-1496062031456-07b8f162a322",  # rosas suaves
+        "https://images.unsplash.com/photo-1521587765099-8835e7201186",  # flores rosas
+        "https://images.unsplash.com/photo-1485808191679-5f86510681a2",  # flores blancas
+        "https://images.unsplash.com/photo-1457089328389-e5d5b7100e44",  # ramo
     ],
     "fuerza": [
         "https://images.unsplash.com/photo-1506744038136-46273834b3fb",  # lago montaña
         "https://images.unsplash.com/photo-1470770841072-f978cf4d019e",  # montaña niebla
         "https://images.unsplash.com/photo-1504609813442-a8924e83f76e",  # ola
         "https://images.unsplash.com/photo-1418065460487-3e41a6c84dc5",  # amanecer mar
+        "https://images.unsplash.com/photo-1454496522488-7a8e488e8606",  # montañas
+        "https://images.unsplash.com/photo-1491466424936-e304919aada7",  # mar fuerte
+        "https://images.unsplash.com/photo-1429080704313-44303ddf28ed",  # picos
+        "https://images.unsplash.com/photo-1444492696363-332accfd4ba1",  # cumbre
+        "https://images.unsplash.com/photo-1483728642387-6c3bdd6c93e5",  # roca
+        "https://images.unsplash.com/photo-1484950763426-56b5bf172dbb",  # mar nieblas
     ],
     "introspeccion": [
         "https://images.unsplash.com/photo-1513002749550-c59d786b8e6c",  # ventana lluvia
         "https://images.unsplash.com/photo-1444492417251-9c84a5fa18e0",  # habitación suave
-        "https://images.unsplash.com/photo-1490750967868-88aa4486c946",  # flores amarillas (reuse)
         "https://images.unsplash.com/photo-1501139083538-0139583c060f",  # luz dorada tenue
+        "https://images.unsplash.com/photo-1490822180406-880c226c150d",  # ventana sutil
+        "https://images.unsplash.com/photo-1462393582430-3d49baf6b9f1",  # taza lectura
+        "https://images.unsplash.com/photo-1444703686981-a3abbc4d4fe3",  # libros calmos
+        "https://images.unsplash.com/photo-1495020689067-958852a7765e",  # hoja blanca
+        "https://images.unsplash.com/photo-1414235077428-338989a2e8c0",  # silla solitaria
+        "https://images.unsplash.com/photo-1502343099400-b5b13d456a1f",  # cama serena
+        "https://images.unsplash.com/photo-1501139083538-0139583c060f",  # luz tenue
     ],
     "esperanza": [
         "https://images.unsplash.com/photo-1506905925346-21bda4d32df4",  # amanecer
         "https://images.unsplash.com/photo-1470252649378-9c29740c9fa8",  # cielo rayo sol
         "https://images.unsplash.com/photo-1497436072909-60f360e1d4b1",  # lago al alba
         "https://images.unsplash.com/photo-1472214103451-9374bd1c798e",  # amanecer neblina
+        "https://images.unsplash.com/photo-1502082553048-f009c37129b9",  # luz arboles
+        "https://images.unsplash.com/photo-1501594907352-04cda38ebc29",  # globo cielo
+        "https://images.unsplash.com/photo-1500382017468-9049fed747ef",  # cielo abierto
+        "https://images.unsplash.com/photo-1481026469463-66327c86e544",  # amanecer ciudad
+        "https://images.unsplash.com/photo-1506260408121-e353d10b87c7",  # cielo dorado
+        "https://images.unsplash.com/photo-1507608616759-54f48f0af0ee",  # arcoíris luz
     ],
 }
 
@@ -863,8 +936,12 @@ async def pipeline_contenido(update: Update, ctx: ContextTypes.DEFAULT_TYPE, ide
 
     try:
         # 1 — Generar copy, frase de imagen y frases de slides
-        await msg.edit_text("✨ Escribiendo copy y preparando slides...")
-        contenido = generar_contenido(idea)
+        force_literal = ctx.user_data.pop("force_literal_caption", False)
+        if force_literal:
+            await msg.edit_text("✨ Usando tu texto tal cual + extrayendo frase para la imagen...")
+        else:
+            await msg.edit_text("✨ Escribiendo copy y preparando slides...")
+        contenido = generar_contenido(idea, force_literal=force_literal)
         caption   = contenido["caption"]
         frase     = contenido["frase_imagen"]
         cat       = contenido.get("categoria", "reflexion")
@@ -934,6 +1011,23 @@ async def pipeline_contenido(update: Update, ctx: ContextTypes.DEFAULT_TYPE, ide
 # ══════════════════════════════════════════════════════════════════════
 #  COMANDOS
 # ══════════════════════════════════════════════════════════════════════
+
+async def cmd_post(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Comando /post <texto>: usa el texto literal como caption sin que la IA lo cambie."""
+    if not es_paty(update):
+        return
+    args = update.message.text.partition(" ")[2].strip()
+    if not args:
+        await update.message.reply_text(
+            "📝 Uso: /post <tu caption literal>\n\n"
+            "El bot tomará tu texto EXACTO como caption (sin reescribirlo) "
+            "y solo generará la frase para la imagen + 4 variantes."
+        )
+        return
+    # Forzamos modo respeto independiente de la detección automática
+    ctx.user_data["force_literal_caption"] = True
+    await pipeline_contenido(update, ctx, args)
+
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not es_paty(update):
@@ -1713,6 +1807,7 @@ def main():
     app.add_handler(CommandHandler("estado", cmd_estado))
     app.add_handler(CommandHandler("ayuda",  cmd_ayuda))
     app.add_handler(CommandHandler("help",   cmd_ayuda))
+    app.add_handler(CommandHandler("post",   cmd_post))
 
     # Callbacks (botones inline)
     app.add_handler(CallbackQueryHandler(handle_callback))
